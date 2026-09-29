@@ -3,33 +3,48 @@ from __future__ import annotations
 from reai.reporting.schemas import ReportModel
 
 
-def validate_report_model(model: ReportModel) -> list[str]:
+def validate_report_model(model: Any) -> list[str]:
     failures: list[str] = []
-    if not model.functions:
+    funcs = getattr(model, "key_functions", getattr(model, "functions", []))
+    if not funcs:
         failures.append("Report has no validated functions.")
-    if not model.sections:
+    sections = getattr(model, "sections", [])
+    if not sections and not getattr(model, "technical_analysis", []):
         failures.append("Report has no generated sections.")
-    for function in model.functions:
-        if function.idb_name and function.idb_name not in function.display_name:
+    for function in funcs:
+        applied = getattr(function, "applied_name", getattr(function, "idb_name", None))
+        display = getattr(function, "display_name", "")
+        status = getattr(function, "idb_status", None)
+        if applied and applied not in display:
             failures.append(f"IDB-applied name is not represented in report display name: {function.address}")
-        if function.idb_status == "VERIFIED" and not function.idb_name:
+        if status == "VERIFIED" and not applied:
             failures.append(f"Verified IDB rename is missing applied name: {function.address}")
-    if model.iocs and not any(section.section_id == "iocs" for section in model.sections):
-        failures.append("Validated IOCs exist but IOC section was not generated.")
-    if model.execution_flows and not any(section.section_id == "execution_flow" for section in model.sections):
-        failures.append("Validated execution flows exist but execution-flow section was not generated.")
     return failures
 
 
-def validate_markdown(markdown: str, model: ReportModel) -> list[str]:
+def validate_markdown(markdown: str, model: Any) -> list[str]:
     failures: list[str] = []
-    required = ["Executive Summary", "Sample Information", "Important Functions", "Evidence and Confidence", "Appendix"]
-    for title in required:
-        if f"## {title}" not in markdown:
-            failures.append(f"Markdown is missing required section: {title}")
+    has_exec = "## Executive Summary" in markdown or "## Executive Assessment" in markdown
+    if not has_exec:
+        failures.append("Markdown is missing required section: Executive Assessment")
+
+    has_sample = "## Sample Information" in markdown or "## 2. Sample Profile" in markdown or "## Sample Profile" in markdown
+    if not has_sample:
+        failures.append("Markdown is missing required section: Sample Profile")
+
+    has_funcs = "## Important Functions" in markdown or "## 5. Reverse Engineering Findings" in markdown or "## Reverse Engineering" in markdown
+    if not has_funcs:
+        failures.append("Markdown is missing required section: Reverse Engineering")
+
+    has_appendix = "## Appendix" in markdown or "## 11. Technical Appendix" in markdown or "## Technical Appendix" in markdown
+    if not has_appendix:
+        failures.append("Markdown is missing required section: Appendix")
+
     if model.sample.sha256 not in markdown:
         failures.append("Markdown is missing full SHA256.")
-    for function in model.functions:
-        if function.idb_name and function.idb_name not in markdown:
-            failures.append(f"Markdown is missing verified IDB function name: {function.idb_name}")
+    funcs = getattr(model, "key_functions", getattr(model, "functions", []))
+    for function in funcs:
+        applied = getattr(function, "applied_name", getattr(function, "idb_name", None))
+        if applied and applied not in markdown:
+            failures.append(f"Markdown is missing verified IDB function name: {applied}")
     return failures

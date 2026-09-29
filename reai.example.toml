@@ -10,7 +10,7 @@ max_concurrent_instances = 1
 database_extension = ".i64"
 
 [ai]
-provider = "openai"
+provider = "disabled"
 model = "gpt-4o-mini"
 api-key = "sk-proj-<REDACTED>"
 max_concurrent_requests = 1
