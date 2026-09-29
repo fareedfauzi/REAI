@@ -1,0 +1,1 @@
+"""IDA lifecycle integration."""

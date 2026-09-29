@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+.manual-phase1-*/
+reai-output/
+reai.toml
+*.local.toml

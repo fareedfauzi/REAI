@@ -1,0 +1,6 @@
+include README.md
+include CHANGELOG.md
+include CONTRIBUTING.md
+include SECURITY.md
+include reai.example.toml
+recursive-include docs *.md
