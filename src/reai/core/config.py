@@ -108,10 +108,10 @@ class PropagationConfig(BaseModel):
 class ValidationConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    rename_confidence_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
-    comment_confidence_threshold: float = Field(default=0.55, ge=0.0, le=1.0)
-    variable_confidence_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
-    type_confidence_threshold: float = Field(default=0.9, ge=0.0, le=1.0)
+    rename_confidence_threshold: float = Field(default=0.65, ge=0.0, le=1.0)
+    comment_confidence_threshold: float = Field(default=0.50, ge=0.0, le=1.0)
+    variable_confidence_threshold: float = Field(default=0.65, ge=0.0, le=1.0)
+    type_confidence_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
 
 
 class AnalysisConfig(BaseModel):
@@ -351,9 +351,54 @@ def load_config_file(path: Path) -> ApplicationConfig:
         raise ConfigError(str(exc)) from exc
 
 
+def discover_config_path() -> Path | None:
+    # 1. Environment variable REAI_CONFIG
+    env_config = os.environ.get("REAI_CONFIG")
+    if env_config:
+        path = Path(env_config).expanduser()
+        if path.is_file():
+            return path
+
+    # 2. Current working directory and parent directories
+    try:
+        current = Path.cwd().resolve()
+        for parent in [current, *current.parents]:
+            candidate = parent / "reai.toml"
+            if candidate.is_file():
+                return candidate
+    except Exception:
+        pass
+
+    # 3. User configuration directory (~/.reai/reai.toml or %APPDATA%/reai/reai.toml)
+    try:
+        user_candidates = [
+            Path.home() / ".reai" / "reai.toml",
+            Path.home() / ".config" / "reai" / "reai.toml",
+        ]
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            user_candidates.append(Path(appdata) / "reai" / "reai.toml")
+        for candidate in user_candidates:
+            if candidate.is_file():
+                return candidate
+    except Exception:
+        pass
+
+    # 4. Source / Repository root (for editable / development installations)
+    try:
+        repo_candidate = Path(__file__).resolve().parents[3] / "reai.toml"
+        if repo_candidate.is_file():
+            return repo_candidate
+    except Exception:
+        pass
+
+    return None
+
+
 def build_config(
     *,
     config_path: Path | None = None,
+    auto_discover: bool = True,
     output_dir: Path | None = None,
     workers: int | None = None,
     recursive: bool | None = None,
@@ -362,8 +407,13 @@ def build_config(
 ) -> ApplicationConfig:
     values = default_config().model_dump()
 
-    if config_path is not None:
-        values.update(load_config_file(config_path).model_dump())
+    target_config = config_path
+    if target_config is None and auto_discover:
+        target_config = discover_config_path()
+
+    if target_config is not None:
+        values.update(load_config_file(target_config).model_dump())
+
 
     if output_dir is not None:
         values["output_dir"] = output_dir

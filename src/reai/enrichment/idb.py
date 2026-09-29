@@ -16,10 +16,11 @@ from reai.core.config import EnrichmentConfig, IDAConfig
 from reai.core.exceptions import EnrichmentError
 from reai.core.sample import Sample
 from reai.enrichment.export import export_changes
-from reai.enrichment.policy import assign_unique_names, build_function_comment, is_placeholder_name, merge_reai_comment
+from reai.enrichment.policy import assign_unique_names, build_function_comment, is_placeholder_name, merge_reai_comment, sanitize_ida_name
 from reai.enrichment.schemas import ChangeStatus, EnrichmentChange, EnrichmentRun, EnrichmentRunStatus, EnrichmentStats, IDBVerification
-from reai.ida.environment import detect_ida_environment
+from reai.ida.environment import detect_ida_environment, get_clean_ida_environment
 from reai.storage.repository import AnalysisRepository
+
 from reai.utils.paths import WorkspacePaths
 
 LOGGER = logging.getLogger("reai.enrichment")
@@ -44,8 +45,9 @@ class IDBEnricher:
 
         original_idb = self.workspace.ida / f"original{self.ida_config.database_extension}"
         analyzed_idb = self.workspace.ida / f"analyzed{self.ida_config.database_extension}"
-        temp_idb = self.workspace.ida / f".analyzed{self.ida_config.database_extension}.tmp"
+        temp_idb = self.workspace.ida / f".analyzed_tmp{self.ida_config.database_extension}"
         if not original_idb.exists():
+
             raise EnrichmentError(f"Original IDB does not exist:\n{original_idb}")
 
         source_fingerprint = self.repository.get_validated_analysis_fingerprint(sample.sample_id)
@@ -89,7 +91,9 @@ class IDBEnricher:
                 raise EnrichmentError("Baseline IDB changed during enrichment; refusing to finalize.")
 
             _atomic_replace(temp_idb, analyzed_idb)
-            _atomic_replace(_sidecar_path(temp_idb), _sidecar_path(analyzed_idb))
+            if _sidecar_path(temp_idb).exists():
+                _atomic_replace(_sidecar_path(temp_idb), _sidecar_path(analyzed_idb))
+
 
             stats = self._finish_run(sample.sample_id, run, candidates, verifications, None)
             export_changes(self.workspace, self.repository, sample.sample_id, run, stats)
@@ -160,8 +164,10 @@ class IDBEnricher:
                 check=False,
                 capture_output=True,
                 text=True,
+                env=get_clean_ida_environment(),
                 timeout=self.ida_config.timeout_seconds,
             )
+
             if completed.returncode != 0:
                 details = (completed.stderr or completed.stdout or "").strip()
                 raise EnrichmentError(f"IDA enrichment failed with exit code {completed.returncode}: {details or '<no output>'}")
@@ -240,7 +246,7 @@ class IDBEnricher:
             elif change.entity == "function" and change.operation == "comment":
                 self._apply_function_comment(state, change)
             elif change.entity == "variable" and change.operation == "rename":
-                self._skip(change, ChangeStatus.SKIPPED_STATE_MISMATCH, "Manifest backend has no stable local variable identity.")
+                self._apply_variable_rename(state, change)
             elif change.entity in {"structure", "structure_field"}:
                 self._apply_structure_change(state, change)
             else:
@@ -308,6 +314,24 @@ class IDBEnricher:
         change.reason = "REAI-managed function comment updated."
         change.timestamp = _now()
 
+    def _apply_variable_rename(self, state: dict[str, Any], change: EnrichmentChange) -> None:
+        function = self._function_for_change(state, change)
+        if function is None:
+            return
+        if not change.original:
+            self._skip(change, ChangeStatus.SKIPPED_STATE_MISMATCH, "Candidate has no original variable name.")
+            return
+        proposed = sanitize_ida_name(change.proposed)
+        if not proposed:
+            self._skip(change, ChangeStatus.SKIPPED_CONFLICT, "Proposed variable name could not be normalized.")
+            return
+        variables = function.setdefault("variables", {})
+        variables[change.original] = proposed
+        change.applied = proposed
+        change.status = ChangeStatus.APPLIED
+        change.reason = "Variable rename staged in manifest."
+        change.timestamp = _now()
+
     def _apply_structure_change(self, state: dict[str, Any], change: EnrichmentChange) -> None:
         if not change.eligible_for_idb:
             self._skip(change, ChangeStatus.SKIPPED_NOT_ELIGIBLE, "Candidate was not eligible for IDB application.")
@@ -353,6 +377,8 @@ class IDBEnricher:
             elif change.entity == "function" and change.operation == "comment" and change.address:
                 actual = state["functions"].get(change.address, {}).get("comment")
                 expected = self.config.comment_marker_begin
+            elif change.entity == "variable" and change.operation == "rename" and change.address:
+                actual = state["functions"].get(change.address, {}).get("variables", {}).get(change.original)
             elif change.entity in {"structure", "structure_field"}:
                 actual = change.applied
             if actual is None or expected not in actual:

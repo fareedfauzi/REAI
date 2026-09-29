@@ -68,7 +68,7 @@ def build_report_model(
     commands = _commands(rows["command_handlers"], function_by_address)
     structures = _structures(rows["structures"], rows["structure_fields"])
     contradictions = _contradictions(rows["contradictions"])
-    attack_mappings = _attack_mappings(subsystems)
+    attack_mappings = _attack_mappings(subsystems, functions, artifacts)
     limitations = _limitations(functions, contradictions, rows["extraction_failures"], rows["mcp_investigations"])
     source_fingerprint = repository.get_validated_analysis_fingerprint(sample_id)
     sample = _sample_info(rows["sample"], rows["metadata"], rows["jobs"])
@@ -351,23 +351,143 @@ def _contradictions(rows: list[dict]) -> list[ReportContradiction]:
     ]
 
 
-def _attack_mappings(subsystems: list[ReportSubsystem]) -> list[AttackMapping]:
-    mappings = []
+def _attack_mappings(
+    subsystems: list[ReportSubsystem],
+    functions: list[ReportFunction] | None = None,
+    artifacts: list[ReportArtifact] | None = None,
+) -> list[AttackMapping]:
+    mappings: list[AttackMapping] = []
+    seen_ids: dict[str, AttackMapping] = {}
+
     for subsystem in subsystems:
         rule_key = subsystem.subsystem_id
         if rule_key not in ATTACK_RULES:
             continue
         technique, technique_id = ATTACK_RULES[rule_key]
-        mappings.append(
-            AttackMapping(
-                technique=technique,
-                technique_id=technique_id,
-                evidence=f"Validated {subsystem.name} subsystem with {len(subsystem.functions)} function(s).",
-                functions=subsystem.functions[:5],
-                confidence=subsystem.confidence,
-            )
+        mapping = AttackMapping(
+            technique=technique,
+            technique_id=technique_id,
+            evidence=f"Validated {subsystem.name} subsystem with {len(subsystem.functions)} function(s).",
+            functions=subsystem.functions[:5],
+            confidence=subsystem.confidence,
         )
+        mappings.append(mapping)
+        seen_ids[technique_id] = mapping
+
+    funcs = functions or []
+    arts = artifacts or []
+
+    # 1. Ingress Tool Transfer (T1105)
+    has_download = any(
+        any(api in f.imports for api in ["URLDownloadToFileW", "URLDownloadToFileA"])
+        or any("download" in (f.summary or "").lower() for f in funcs)
+        or any(a.artifact_type == "url" for a in arts)
+        for f in funcs
+    )
+    if has_download:
+        dl_funcs = [f for f in funcs if any("urldownload" in imp.lower() for imp in f.imports) or "download" in (f.summary or "").lower()][:3]
+        if "T1105" not in seen_ids:
+            mapping = AttackMapping(
+                technique="Ingress Tool Transfer",
+                technique_id="T1105",
+                evidence="Downloads external payload/components via URLDownloadToFile or HTTP APIs.",
+                functions=dl_funcs or funcs[:2],
+                confidence=0.92,
+            )
+            mappings.append(mapping)
+            seen_ids["T1105"] = mapping
+
+    # 2. Web Protocols (T1071.001)
+    has_http = any(
+        any(api in imp.lower() for imp in f.imports for api in ["internetopen", "internetopenurl", "winhttp"])
+        or any(a.artifact_type == "url" for a in arts)
+        for f in funcs
+    )
+    if has_http and "T1071" in seen_ids:
+        seen_ids["T1071"].technique = "Application Layer Protocol: Web Protocols"
+        seen_ids["T1071"].technique_id = "T1071.001"
+        seen_ids["T1071"].evidence = "Communicates over HTTP/HTTPS protocols using WinINet / WinHttp."
+
+    # 3. Windows Command Shell (T1059.003)
+    has_cmd = any("cmd.exe" in str(a.original_value).lower() for a in arts)
+    if has_cmd:
+        cmd_funcs = [f for f in funcs if any("cmd" in (e.get("value") or "").lower() for e in f.evidence)][:2]
+        if "T1059" in seen_ids:
+            seen_ids["T1059"].technique = "Command and Scripting Interpreter: Windows Command Shell"
+            seen_ids["T1059"].technique_id = "T1059.003"
+            seen_ids["T1059"].evidence = "Spawns cmd.exe to execute command sequences."
+        else:
+            mapping = AttackMapping(
+                technique="Command and Scripting Interpreter: Windows Command Shell",
+                technique_id="T1059.003",
+                evidence="Spawns cmd.exe to execute command sequences.",
+                functions=cmd_funcs or funcs[:2],
+                confidence=0.90,
+            )
+            mappings.append(mapping)
+            seen_ids["T1059.003"] = mapping
+
+    # 4. File Deletion / Indicator Removal (T1070.004)
+    has_del = any("del " in str(a.original_value).lower() for a in arts)
+    if has_del and "T1070.004" not in seen_ids:
+        del_funcs = [f for f in funcs if any("del" in (e.get("value") or "").lower() for e in f.evidence)][:2]
+        mapping = AttackMapping(
+            technique="Indicator Removal: File Deletion",
+            technique_id="T1070.004",
+            evidence="Executes command shell script to delete malware executable from disk.",
+            functions=del_funcs or funcs[:2],
+            confidence=0.90,
+        )
+        mappings.append(mapping)
+        seen_ids["T1070.004"] = mapping
+
+    # 5. Time-Based Evasion (T1497.003)
+    has_sleep_evasion = any("ping 1.1.1.1" in str(a.original_value) for a in arts) or any("sleep" in (f.semantic_name or "").lower() for f in funcs)
+    if has_sleep_evasion:
+        if "T1497" in seen_ids:
+            seen_ids["T1497"].technique = "Virtualization/Sandbox Evasion: Time Based Evasion"
+            seen_ids["T1497"].technique_id = "T1497.003"
+            seen_ids["T1497"].evidence = "Executes delay loops or ICMP timeout to delay execution and evade sandboxes."
+        elif "T1497.003" not in seen_ids:
+            mapping = AttackMapping(
+                technique="Virtualization/Sandbox Evasion: Time Based Evasion",
+                technique_id="T1497.003",
+                evidence="Executes delay loops or ICMP timeout to delay execution and evade sandboxes.",
+                functions=[f for f in funcs if "sleep" in (f.semantic_name or "").lower()][:2] or funcs[:2],
+                confidence=0.88,
+            )
+            mappings.append(mapping)
+            seen_ids["T1497.003"] = mapping
+
+    # 6. Masquerading (T1036.005)
+    has_masquerade = any("favicon.ico" in str(a.original_value).lower() for a in arts)
+    if has_masquerade and "T1036.005" not in seen_ids:
+        mapping = AttackMapping(
+            technique="Masquerading: Match Legitimate Name or Extension",
+            technique_id="T1036.005",
+            evidence="Transfers executable payload disguised under icon (.ico) file extension.",
+            functions=funcs[:2],
+            confidence=0.88,
+        )
+        mappings.append(mapping)
+        seen_ids["T1036.005"] = mapping
+
+    # 7. Native API Execution (T1106)
+    has_native_exec = any(any(api in imp for imp in f.imports for api in ["ShellExecuteW", "CreateProcessW"]) for f in funcs)
+    if has_native_exec and "T1106" not in seen_ids:
+        exec_funcs = [f for f in funcs if any(api in imp for imp in f.imports for api in ["ShellExecuteW", "CreateProcessW"])][:3]
+        mapping = AttackMapping(
+            technique="Native API",
+            technique_id="T1106",
+            evidence="Directly invokes Win32 API functions (ShellExecuteW/CreateProcessW) for execution.",
+            functions=exec_funcs or funcs[:2],
+            confidence=0.90,
+        )
+        mappings.append(mapping)
+        seen_ids["T1106"] = mapping
+
     return mappings
+
 
 
 def _limitations(

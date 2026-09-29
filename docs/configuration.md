@@ -3,14 +3,24 @@
 REAI configuration precedence:
 
 ```text
-built-in defaults -> TOML config file -> CLI options
+built-in defaults -> auto-discovered / specified reai.toml -> CLI options
 ```
 
-Load a config file with:
+### Auto-Discovery Order
+
+If `--config` is not explicitly passed, REAI automatically looks for `reai.toml` in:
+
+1. `REAI_CONFIG` environment variable (if set)
+2. Current working directory (`./reai.toml` and parent directories)
+3. User home directory (`~/.reai/reai.toml` or `~/.config/reai/reai.toml` or `%APPDATA%/reai/reai.toml`)
+4. REAI repository/installation root
+
+You can still explicitly load a custom config file at any time with:
 
 ```bash
-python -m reai malware.exe --config reai.example.toml
+reai malware.exe --config /path/to/custom.toml
 ```
+
 
 ## Top-Level Settings
 

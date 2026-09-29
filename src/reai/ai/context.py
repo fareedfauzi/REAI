@@ -49,14 +49,25 @@ class FunctionContextBuilder:
     def _read_artifact(self, relative_path: str | None) -> str | None:
         if not relative_path:
             return None
-        path = (self.workspace.root / relative_path).resolve()
+        root_resolved = self.workspace.root.resolve()
+        candidate = (self.workspace.root / relative_path).resolve()
         try:
-            path.relative_to(self.workspace.root.resolve())
+            candidate.relative_to(root_resolved)
+            if candidate.exists() and candidate.is_file():
+                return candidate.read_text(encoding="utf-8", errors="replace")
         except ValueError:
-            return None
-        if not path.exists() or not path.is_file():
-            return None
-        return path.read_text(encoding="utf-8", errors="replace")
+            pass
+
+        # Fallback if relative_path was recorded without 'Extracted Codes' prefix
+        fallback = (self.workspace.extracted_codes / relative_path).resolve()
+        try:
+            fallback.relative_to(root_resolved)
+            if fallback.exists() and fallback.is_file():
+                return fallback.read_text(encoding="utf-8", errors="replace")
+        except ValueError:
+            pass
+
+        return None
 
     def _truncate(self, text: str | None) -> tuple[str | None, bool]:
         if text is None or len(text) <= self.max_text_chars:

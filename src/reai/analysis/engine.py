@@ -44,7 +44,8 @@ class MalwareUnderstandingEngine:
         )
         # Recluster after propagation because parent semantics may have improved.
         subsystems, capabilities = discover_subsystems(self.repository, sample_id, propagated_findings)
-        artifacts = validate_artifacts(propagated_findings)
+        extracted_strings = self.repository.list_strings_with_xrefs(sample_id)
+        artifacts = validate_artifacts(propagated_findings, extracted_strings)
         structures = recover_structures(propagated_findings)
         execution_flows = build_execution_flows(self.repository, sample_id, propagated_findings, subsystems)
         data_flows = build_data_flows(artifacts)

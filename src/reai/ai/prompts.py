@@ -19,10 +19,17 @@ def build_function_prompt(context: FunctionContext) -> str:
         "task": "Analyze one IDA function and propose the most specific defensible semantic interpretation.",
         "schema_version": SCHEMA_VERSION,
         "naming_policy": [
-            "Use concise snake_case names.",
-            "Avoid generic names such as process_data, handle_buffer, do_work, helper_function.",
-            "Leave proposed_name null if a specific behavior is not defensible.",
+            "Propose a concise, specific snake_case name reflecting the function's observed purpose, API calls, or control flow (e.g., wrapper_output_wstring, init_slist_head, timed_sleep_loop, set_exception_filter, compute_bit_shifts).",
+            "Avoid overly generic names such as process_data, handle_buffer, do_work, helper_function.",
+            "Do NOT preserve or repeat IDA's sub_ prefix in proposed_name. Always propose a descriptive semantic name.",
+            "Only leave proposed_name null if the function is completely empty or has no discernable purpose.",
         ],
+        "variable_policy": [
+            "Propose renames for local variables or function arguments (e.g. this, a1, a2, v1, v2) that appear in the decompiled code.",
+            "original MUST be the exact variable identifier as it appears in IDA decompilation (e.g. 'this', 'a1', 'a2', 'v3', 'Buffer'). Do NOT include types, pointers, or explanations in 'original' (e.g. use 'this', NOT '*this (pointer)').",
+            "proposed MUST be a concise valid snake_case identifier (e.g. 'output_buffer', 'buffer_size', 'sleep_duration_ms', 'input_val'). Do NOT include spaces or parenthetical descriptions in 'proposed'.",
+        ],
+
         "evidence_policy": [
             "Cite deterministic IDA facts for semantic conclusions.",
             "Mark deterministic evidence as IDA_OBSERVED.",

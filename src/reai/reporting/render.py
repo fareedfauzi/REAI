@@ -38,6 +38,8 @@ def render_markdown(model: ReportModel, config: ReportConfig) -> str:
     lines.extend([_section_text(model, "evidence_confidence")])
     if model.contradictions or model.limitations:
         lines.extend([_section_text(model, "limitations"), _limitations(model)])
+    if any(s.section_id == "yara_rule" for s in model.sections):
+        lines.extend([_section_text(model, "yara_rule"), _yara_rule_block(model)])
     lines.extend([_section_text(model, "appendix"), _appendix(model)])
     return "\n".join(line for line in lines if line is not None).rstrip() + "\n"
 
@@ -65,7 +67,7 @@ def render_html(markdown: str, model: ReportModel) -> str:
             if re.match(r"^\|[-: ]+\|$", line):
                 continue
             cells = [html.escape(cell.strip()) for cell in line.strip("|").split("|")]
-            tag = "th" if cells and cells[0] in {"Field", "Address", "Type", "Command", "Technique", "Name"} else "td"
+            tag = "th" if cells and cells[0] in {"Field", "Address", "Type", "Command", "Technique", "Name", "Offset", "Source", "Category", "Algorithm"} else "td"
             body_lines.append("<tr>" + "".join(f"<{tag}>{cell}</{tag}>" for cell in cells) + "</tr>")
             continue
         if in_table:
@@ -274,13 +276,66 @@ def _limitations(model: ReportModel) -> str:
     return "\n".join(lines)
 
 
+def _yara_rule_block(model: ReportModel) -> str:
+    safe_name = re.sub(r"[^A-Za-z0-9_]", "_", model.sample.filename).strip("_")
+    rule_name = f"Trojan_Win32_{safe_name}"
+    sha256 = model.sample.sha256
+    md5 = model.sample.md5
+    date_str = str(model.sample.analysis_timestamp).split("T")[0] if "T" in str(model.sample.analysis_timestamp) else "2026-09-30"
+
+    strings_lines = []
+    seen = set()
+    idx = 0
+    for artifact in model.artifacts:
+        val = artifact.normalized_value or artifact.original_value
+        if not val or val.lower() in seen or len(val) < 4:
+            continue
+        if artifact.artifact_type in {"url", "domain", "file_path", "pdb_path", "command_line"} or artifact.is_ioc:
+            seen.add(val.lower())
+            idx += 1
+            escaped = val.replace("\\", "\\\\").replace('"', '\\"')
+            if artifact.artifact_type in {"url", "file_path", "command_line"}:
+                strings_lines.append(f'        $s{idx} = "{escaped}" ascii wide nocase')
+            else:
+                strings_lines.append(f'        $s{idx} = "{escaped}" ascii nocase')
+
+    if not strings_lines:
+        strings_lines.append(f'        $sha256 = "{sha256}" ascii')
+
+    cond = ["uint16(0) == 0x5A4D", f"filesize < {max(50000, model.sample.size * 2)}"]
+    if idx >= 2:
+        cond.append("2 of ($s*)")
+    elif idx == 1:
+        cond.append("$s1")
+    else:
+        cond.append("all of them")
+
+    rule_lines = [
+        f"rule {rule_name}",
+        "{",
+        "    meta:",
+        f'        description = "Detects {model.sample.filename} malware artifacts and stager logic"',
+        '        author = "REAI Automated Threat Intelligence"',
+        f'        date = "{date_str}"',
+        f'        sample_sha256 = "{sha256}"',
+        f'        sample_md5 = "{md5}"',
+        '        tlp = "CLEAR"',
+        "    strings:",
+        *strings_lines[:15],
+        "    condition:",
+        f"        {' and '.join(cond)}",
+        "}",
+    ]
+    return "```yara\n" + "\n".join(rule_lines) + "\n```\n"
+
+
 def _appendix(model: ReportModel) -> str:
     rows = [
         ("Report schema", model.schema_version),
         ("Report fingerprint", model.fingerprint),
         ("Validated analysis fingerprint", model.source_analysis_fingerprint or ""),
         ("IDB enrichment fingerprint", model.enrichment_fingerprint or ""),
-        ("Companion IDB", "ida/analyzed.i64"),
+        ("Companion IDB", "IDB Files/analyzed.i64"),
     ]
     return _table(["Field", "Value"], rows)
 

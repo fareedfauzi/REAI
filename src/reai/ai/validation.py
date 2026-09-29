@@ -24,12 +24,13 @@ def is_generic_name(name: str | None) -> bool:
 def validate_proposed_name(name: str | None) -> tuple[bool, str | None]:
     if not name:
         return False, "No proposed name."
-    if name.startswith("sub_"):
+    name_clean = name.strip()
+    if name_clean.lower().startswith("sub_"):
         return False, "Proposed name preserves IDA sub_ placeholder."
-    if is_generic_name(name):
+    if is_generic_name(name_clean):
         return False, "Proposed name is too generic."
-    if len(name) > 80:
+    if len(name_clean) > 80:
         return False, "Proposed name is too long."
-    if not re.fullmatch(r"[a-z_][a-z0-9_]*", name):
-        return False, "Proposed name must be snake_case identifier."
+    if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", name_clean):
+        return False, "Proposed name must be a valid identifier."
     return True, None

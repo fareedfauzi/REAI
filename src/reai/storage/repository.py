@@ -529,7 +529,6 @@ class AnalysisRepository:
                 """
                 SELECT * FROM functions
                 WHERE sample_id = ?
-                  AND name LIKE 'sub_%'
                   AND is_library = 0
                   AND is_thunk = 0
                   AND is_external = 0
@@ -537,7 +536,39 @@ class AnalysisRepository:
                 """,
                 (sample_id,),
             ).fetchall()
-        return [dict(row) for row in rows if is_ida_placeholder_name(row["name"])]
+        entry_names = {"main", "_main", "wmain", "_wmain", "winmain", "_winmain@16", "wwinmain", "_wwinmain@16", "start", "_start"}
+        return [
+            dict(row) for row in rows
+            if is_ida_placeholder_name(row["name"]) or (row["name"] and row["name"].lower() in entry_names)
+        ]
+
+    def list_strings(self, sample_id: str) -> list[dict]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT address, value, encoding, length, record_json
+                FROM strings
+                WHERE sample_id = ?
+                ORDER BY address
+                """,
+                (sample_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_strings_with_xrefs(self, sample_id: str) -> list[dict]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT s.address, s.value, s.encoding, s.length, s.record_json,
+                       x.function_address, x.source_address
+                FROM strings s
+                LEFT JOIN string_xrefs x ON s.sample_id = x.sample_id AND s.address = x.string_address
+                WHERE s.sample_id = ?
+                ORDER BY s.address
+                """,
+                (sample_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def list_extracted_functions(self, sample_id: str) -> list[dict]:
         with self._connect() as connection:
@@ -1477,7 +1508,7 @@ class AnalysisRepository:
             for flow in model.execution_flows:
                 connection.execute(
                     """
-                    INSERT INTO execution_flows (
+                    INSERT OR REPLACE INTO execution_flows (
                         flow_id, sample_id, source_function, target_function,
                         relationship, confidence, evidence_json
                     ) VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -1495,7 +1526,7 @@ class AnalysisRepository:
             for flow in model.data_flows:
                 connection.execute(
                     """
-                    INSERT INTO data_flows (
+                    INSERT OR REPLACE INTO data_flows (
                         flow_id, sample_id, source_entity, target_entity,
                         data_name, confidence, evidence_json
                     ) VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -1510,6 +1541,7 @@ class AnalysisRepository:
                         json.dumps(flow.evidence, sort_keys=True),
                     ),
                 )
+
             for structure in model.recovered_structures:
                 connection.execute(
                     """

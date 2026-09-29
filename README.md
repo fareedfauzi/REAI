@@ -137,15 +137,15 @@ A sample workspace is named from the file stem and the first eight SHA-256 chara
 ```text
 reai-output/
 `-- malware_6e921af7/
-    |-- ida/
+    |-- IDB Files/
     |   |-- original.i64
     |   |-- analyzed.i64
     |   `-- analyzed.i64.reai.json
-    |-- report/
+    |-- REPORT/
     |   |-- report.md
     |   |-- report.html
     |   `-- report.pdf
-    |-- analysis/
+    |-- Analysis Data/
     |   |-- analysis.db
     |   |-- sample.json
     |   |-- functions.json
@@ -155,13 +155,14 @@ reai-output/
     |   |-- validated_analysis.json
     |   |-- changes.json
     |   `-- report_model.json
-    |-- raw/
-    |-- pseudocode/
-    |-- disassembly/
-    `-- logs/
+    |-- Extracted Codes/
+    |   |-- pseudocode/
+    |   `-- disassembly/
+    |-- Raw Data/
+    `-- REAI Logs/
 ```
 
-The SQLite database in `analysis/analysis.db` is the canonical analysis state. The IDB is an analyst output, not REAI's reasoning memory.
+The SQLite database in `Analysis Data/analysis.db` is the canonical analysis state. The IDB is an analyst output, not REAI's reasoning memory.
 
 See [docs/output-structure.md](docs/output-structure.md).
 

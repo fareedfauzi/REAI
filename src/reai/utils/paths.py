@@ -16,13 +16,12 @@ RESERVED_WINDOWS_NAMES = {
 }
 
 WORKSPACE_SUBDIRS = (
-    "ida",
-    "report",
-    "analysis",
-    "raw",
-    "pseudocode",
-    "disassembly",
-    "logs",
+    "IDB Files",
+    "REPORT",
+    "Analysis Data",
+    "Raw Data",
+    "Extracted Codes",
+    "REAI Logs",
 )
 
 
@@ -34,6 +33,7 @@ class WorkspacePaths(BaseModel):
     report: Path
     analysis: Path
     raw: Path
+    extracted_codes: Path
     pseudocode: Path
     disassembly: Path
     logs: Path
@@ -48,22 +48,27 @@ class WorkspacePaths(BaseModel):
 
     @classmethod
     def from_root(cls, root: Path) -> "WorkspacePaths":
+        extracted_codes = root / "Extracted Codes"
+        analysis = root / "Analysis Data"
         return cls(
             root=root,
-            ida=root / "ida",
-            report=root / "report",
-            analysis=root / "analysis",
-            raw=root / "raw",
-            pseudocode=root / "pseudocode",
-            disassembly=root / "disassembly",
-            logs=root / "logs",
-            database=root / "analysis" / "analysis.db",
-            sample_metadata=root / "analysis" / "sample.json",
+            ida=root / "IDB Files",
+            report=root / "REPORT",
+            analysis=analysis,
+            raw=root / "Raw Data",
+            extracted_codes=extracted_codes,
+            pseudocode=extracted_codes / "pseudocode",
+            disassembly=extracted_codes / "disassembly",
+            logs=root / "REAI Logs",
+            database=analysis / "analysis.db",
+            sample_metadata=analysis / "sample.json",
         )
 
     def create_directories(self) -> None:
         for subdir in WORKSPACE_SUBDIRS:
             (self.root / subdir).mkdir(parents=True, exist_ok=True)
+        self.pseudocode.mkdir(parents=True, exist_ok=True)
+        self.disassembly.mkdir(parents=True, exist_ok=True)
 
 
 def sanitize_filename_stem(value: str, max_length: int = 80) -> str:
@@ -98,7 +103,9 @@ def find_workspace_by_sha256(output_root: Path, sha256: str) -> WorkspacePaths |
     for child in output_root.iterdir():
         if not child.is_dir() or child.is_symlink():
             continue
-        metadata = child / "analysis" / "sample.json"
+        metadata = child / "Analysis Data" / "sample.json"
+        if not metadata.exists():
+            metadata = child / "analysis" / "sample.json"
         if not metadata.exists():
             continue
         try:

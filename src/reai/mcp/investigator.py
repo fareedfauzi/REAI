@@ -257,7 +257,7 @@ class MCPInvestigator:
                 added += 1
 
         previous.analysis_pass = max(previous.analysis_pass + 1, target.analysis_pass + 1)
-        previous.summary = _append_mcp_summary(previous.summary, capabilities, added)
+        # Keep previous.summary clean (malware behavior only) for IDB comments and reports.
         previous.reasoning_summary = _append_mcp_summary(previous.reasoning_summary, capabilities, added)
 
         # Only pass the set of capabilities that actually returned evidence items.

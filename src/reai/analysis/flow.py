@@ -19,6 +19,7 @@ def build_execution_flows(
         for member in subsystem.functions
     }
     flows: list[ExecutionFlow] = []
+    seen_execution_flow_ids: set[str] = set()
     for row in repository.list_function_calls(sample_id):
         caller = finding_by_address.get(row["caller"])
         callee = finding_by_address.get(row["callee"])
@@ -30,9 +31,13 @@ def build_execution_flows(
         relationship = "calls"
         if subsystem_by_function.get(caller.address) and subsystem_by_function.get(caller.address) == subsystem_by_function.get(callee.address):
             relationship = "same_subsystem_call"
+        flow_id = _id(caller.address, callee.address, relationship)
+        if flow_id in seen_execution_flow_ids:
+            continue
+        seen_execution_flow_ids.add(flow_id)
         flows.append(
             ExecutionFlow(
-                flow_id=_id(caller.address, callee.address, relationship),
+                flow_id=flow_id,
                 source_function=caller.address,
                 target_function=callee.address,
                 relationship=relationship,
@@ -48,12 +53,17 @@ def build_execution_flows(
 
 def build_data_flows(artifacts: list[ValidatedArtifact]) -> list[DataFlow]:
     flows: list[DataFlow] = []
+    seen_data_flow_ids: set[str] = set()
     for artifact in artifacts:
         if not artifact.function_address:
             continue
+        flow_id = _id("data", artifact.artifact_id, artifact.function_address)
+        if flow_id in seen_data_flow_ids:
+            continue
+        seen_data_flow_ids.add(flow_id)
         flows.append(
             DataFlow(
-                flow_id=_id("data", artifact.artifact_id, artifact.function_address),
+                flow_id=flow_id,
                 source_entity=f"artifact:{artifact.normalized_value}",
                 target_entity=artifact.function_address,
                 data_name=artifact.role,
@@ -62,6 +72,7 @@ def build_data_flows(artifacts: list[ValidatedArtifact]) -> list[DataFlow]:
             )
         )
     return flows
+
 
 
 def build_command_handlers(
@@ -103,6 +114,12 @@ def build_configuration_items(artifacts: list[ValidatedArtifact]) -> list[Config
             key = "c2_domain" if artifact.artifact_type == "domain" else f"c2_{artifact.artifact_type}"
         elif artifact.role == "persistence":
             key = "persistence_artifact"
+        elif artifact.role == "dropped_payload":
+            key = "staged_payload_path"
+        elif artifact.role == "build_artifact":
+            key = "compiler_pdb_path"
+        elif artifact.role == "execution" and any(k in artifact.original_value.lower() for k in ("del", "ping")):
+            key = "self_deletion_command"
         else:
             continue
         items.append(

@@ -78,12 +78,19 @@ def collect_metadata(args):
         "entry_points": entry_points,
         "file_type": safe_call(None, ida_loader.get_file_type_name),
         "loader": safe_call(None, ida_loader.get_path, ida_loader.PATH_TYPE_IDB),
-        "processor": info,
         "min_address": addr(min_ea),
         "max_address": addr(max_ea),
-        "ida_version": safe_call(None, ida_idaapi.get_kernel_version),
+        "ida_version": safe_call(
+            None,
+            lambda: getattr(
+                __import__("ida_kernwin"),
+                "get_kernel_version",
+                getattr(ida_idaapi, "get_kernel_version", lambda: None),
+            )(),
+        ),
         "python_version": platform.python_version(),
         "reai_version": args.get("reai_version"),
+
         "analysis_started_at": args.get("analysis_started_at"),
         "analysis_completed_at": utc_now(),
     }
@@ -167,9 +174,10 @@ def collect_strings():
                 {
                     "source_address": int(ref),
                     "destination_address": ea,
-                    "xref_type": str(safe_call(None, ida_xref.get_xref_type, ref)),
+                    "xref_type": "data",
                     "source_function": func,
                     "destination_entity": "string",
+
                 }
             )
         records[ea] = {
@@ -198,8 +206,8 @@ def collect_functions(imports_by_address, strings_by_address, workspace_root):
     edges = []
     failures = []
     all_xrefs = []
-    pseudocode_dir = Path(workspace_root) / "pseudocode"
-    disassembly_dir = Path(workspace_root) / "disassembly"
+    pseudocode_dir = Path(workspace_root) / "Extracted Codes" / "pseudocode"
+    disassembly_dir = Path(workspace_root) / "Extracted Codes" / "disassembly"
     pseudocode_dir.mkdir(parents=True, exist_ok=True)
     disassembly_dir.mkdir(parents=True, exist_ok=True)
     hexrays_available = bool(safe_call(False, ida_hexrays.init_hexrays_plugin))
@@ -284,7 +292,7 @@ def collect_functions(imports_by_address, strings_by_address, workspace_root):
         dis_name = artifact_filename(int(func.start_ea), name, "asm")
         (disassembly_dir / dis_name).write_text("\n".join(dis_lines) + "\n", encoding="utf-8", errors="replace")
         record["disassembly_status"] = "success"
-        record["disassembly_path"] = str(Path("disassembly") / dis_name)
+        record["disassembly_path"] = str(Path("Extracted Codes") / "disassembly" / dis_name)
 
         if hexrays_available:
             try:
@@ -297,7 +305,7 @@ def collect_functions(imports_by_address, strings_by_address, workspace_root):
                     errors="replace",
                 )
                 record["decompilation_status"] = "success"
-                record["pseudocode_path"] = str(Path("pseudocode") / pseudo_name)
+                record["pseudocode_path"] = str(Path("Extracted Codes") / "pseudocode" / pseudo_name)
             except Exception as exc:
                 record["decompilation_status"] = "failed"
                 record["decompilation_error"] = str(exc)
@@ -429,10 +437,20 @@ def main():
 
 
 if __name__ == "__main__":
+    import tempfile
+    import traceback
     try:
         main()
     except Exception as exc:
+        err_msg = traceback.format_exc()
         try:
-            Path("reai_ida_failure.txt").write_text(str(exc), encoding="utf-8")
-        finally:
-            raise
+            fail_path = Path(tempfile.gettempdir()) / "reai_ida_failure.txt"
+            fail_path.write_text(err_msg, encoding="utf-8")
+        except Exception:
+            pass
+        try:
+            import ida_pro
+            ida_pro.qexit(1)
+        except Exception:
+            sys.exit(1)
+

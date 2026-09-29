@@ -65,7 +65,7 @@ def build_function_comment(change: EnrichmentChange, *, confidence_label: str | 
         f"[REAI ANALYSIS - {label}]",
         "",
         "Purpose:",
-        change.proposed,
+        re.sub(r"\s*MCP investigation added \d+ read-only evidence item\(s\) from [^.]*\.?", "", str(change.proposed)).strip(),
     ]
     if change.original:
         lines.extend(["", "Original:", change.original])
