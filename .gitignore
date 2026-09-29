@@ -19,6 +19,8 @@ htmlcov/
 build/
 dist/
 
+tests/
+
 # Workspace & run outputs
 .manual-phase1-*/
 reai-output/
