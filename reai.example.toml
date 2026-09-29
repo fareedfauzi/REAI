@@ -19,7 +19,8 @@ timeout_seconds = 120
 
 [mcp]
 enabled = false
-provider = "disabled"
+provider = "disabled" # Options: "disabled", "simulation"
+
 max_rounds_per_function = 5
 max_tool_calls_per_function = 20
 max_related_functions = 20

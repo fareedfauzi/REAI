@@ -1,10 +1,44 @@
+# Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python & testing caches
 __pycache__/
 *.py[cod]
+*$py.class
 *.egg-info/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Build artifacts
 build/
 dist/
+
+# Workspace & run outputs
 .manual-phase1-*/
 reai-output/
+*.log
+
+# IDA temporary files
+*.idb
+*.i64
+*.nam
+*.id0
+*.id1
+*.id2
+*.til
+
+# Secrets and local configurations
 reai.toml
 *.local.toml
+.env
+
+# Editor & IDE files
+.vscode/
+.idea/
+

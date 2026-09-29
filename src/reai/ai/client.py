@@ -31,16 +31,17 @@ def create_ai_client(config: AIConfig) -> AIClient | None:
     provider = config.provider.lower()
     if provider == "disabled":
         return None
-    if provider == "mock":
-        return MockAIClient(config)
+    if provider in {"simulation", "mock"}:
+        return SimulationAIClient(config)
     if provider == "openai":
         return OpenAIClient(config)
     raise AIProviderError(f"Unsupported AI provider:\n{config.provider}")
 
 
-class MockAIClient:
+class SimulationAIClient:
     def __init__(self, config: AIConfig) -> None:
         self.config = config
+
 
     def analyze_function(self, context: FunctionContext, *, analysis_pass: int, retry_count: int = 0) -> AIProviderResponse:
         start = time.perf_counter()
@@ -122,10 +123,15 @@ class MockAIClient:
         return AIProviderResponse(result=result, request=request)
 
     def model_info(self) -> dict:
-        return {"provider": "mock", "model": self.config.model or "mock-phase3"}
+        return {"provider": "simulation", "model": self.config.model or "simulation-phase3"}
+
+
+# Backward-compatibility alias
+MockAIClient = SimulationAIClient
 
 
 class OpenAIClient:
+
     def __init__(self, config: AIConfig) -> None:
         self.config = config
         if not config.model:

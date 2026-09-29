@@ -28,12 +28,15 @@ class IDAInvestigationClient(Protocol):
 
 
 def create_mcp_client(config: MCPConfig) -> IDAInvestigationClient | None:
-    if not config.enabled or config.provider.lower() == "disabled":
+    if not config.enabled:
         return None
-    if config.provider.lower() == "mock":
-        return MockMCPClient()
+    provider = config.provider.lower()
+    if provider == "disabled":
+        return None
+    if provider in {"simulation", "simulator", "simulated", "mock"}:
+        return SimulationInvestigationClient()
     raise MCPError(
-        "Unsupported MCP provider. Configure [mcp].provider = \"mock\" for deterministic tests "
+        "Unsupported MCP provider. Configure [mcp].provider = \"simulation\" for deterministic offline investigation "
         "or add a concrete IDA MCP adapter for this environment."
     )
 
@@ -75,7 +78,9 @@ class ReadOnlyMCPSession:
         return self.client.execute(capability, target, parameters or {})
 
 
-class MockMCPClient:
+class SimulationInvestigationClient:
+    """Deterministic simulation provider for autonomous Phase 4 investigation."""
+
     def __init__(
         self,
         *,
@@ -99,7 +104,7 @@ class MockMCPClient:
 
     def execute(self, capability: MCPCapability, target: str, parameters: dict) -> MCPToolResult:
         if not self.connected:
-            raise MCPError("Mock MCP client is not connected.")
+            raise MCPError("Simulation investigation client is not connected.")
         start = time.perf_counter()
         key = (capability.value, target.lower())
         if key in self._failures:
@@ -129,6 +134,11 @@ class MockMCPClient:
         )
 
 
+# Backward-compatibility alias
+MockMCPClient = SimulationInvestigationClient
+
+
+
 def _default_observations(capability: MCPCapability, target: str, parameters: dict) -> list[dict]:
     if capability == MCPCapability.CALLERS:
         return [{"type": "caller", "source_function": "0x401000", "source_address": "0x401050", "target": target}]
@@ -139,7 +149,8 @@ def _default_observations(capability: MCPCapability, target: str, parameters: di
     if capability == MCPCapability.DISASSEMBLE:
         return [{"type": "disassembly", "address": target, "text": f"{target}: call qword ptr [rax]"}]
     if capability == MCPCapability.DECOMPILE:
-        return [{"type": "pseudocode", "address": target, "text": f"// mock decompilation for {target}"}]
+        return [{"type": "pseudocode", "address": target, "text": f"// simulated decompilation for {target}"}]
+
     if capability == MCPCapability.CFG:
         return [{"type": "cfg", "address": target, "blocks": 3, "edges": 2}]
     if capability in {MCPCapability.MEMORY, MCPCapability.DATA}:

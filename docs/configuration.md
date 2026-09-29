@@ -53,7 +53,7 @@ python -m reai malware.exe --config reai.example.toml
 | Key | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `enabled` | boolean | `false` | Enable Phase 4 investigation. |
-| `provider` | string | `disabled` | `disabled` or `mock` in this repository. |
+| `provider` | string | `disabled` | `disabled` or `simulation` in this repository. |
 | `max_functions` | integer/null | unset | Limit investigation candidates. |
 | `max_rounds_per_function` | integer | `5` | Bound iterative investigation. |
 | `max_tool_calls_per_function` | integer | `20` | Bound tool calls per function. |
@@ -63,7 +63,8 @@ python -m reai malware.exe --config reai.example.toml
 | `timeout_seconds` | integer | `60` | MCP operation timeout setting. |
 | `allowlist` | list[string] | read-only IDA capabilities | Restricts tool capabilities. |
 
-No live MCP adapter is included yet. `mock` is deterministic and useful for tests.
+No live external MCP network daemon is included yet. `simulation` provides deterministic offline investigation modeling for tests and automated evaluation.
+
 
 ## Analysis
 

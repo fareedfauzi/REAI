@@ -157,3 +157,17 @@ def test_completed_investigation_resume_skips_repeated_mcp_calls(tmp_path):
     investigator.run(sample.sample_id)
 
     assert len(repository.get_mcp_call_rows(sample.sample_id)) == first_calls
+
+
+def test_simulation_provider_executes_investigation(tmp_path):
+    sample, workspace, repository = _workspace_with_uncertain_phase3(tmp_path)
+    investigator = MCPInvestigator(
+        MCPConfig(enabled=True, provider="simulation", max_rounds_per_function=2, max_tool_calls_per_function=3),
+        repository,
+        workspace,
+    )
+    stats = investigator.run(sample.sample_id)
+    assert stats is not None
+    assert stats.mcp_calls >= 1
+    assert stats.resolved_medium == 1
+
