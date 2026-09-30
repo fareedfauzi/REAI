@@ -82,8 +82,9 @@ class AIConfig(BaseModel):
     api_key: str | None = Field(default=None, validation_alias=AliasChoices("api_key", "api-key"))
     base_url: str | None = Field(default=None, validation_alias=AliasChoices("base_url", "base-url", "api_base", "api-base"))
     max_functions: int | None = Field(default=None, ge=1)
-    max_concurrent_requests: int = Field(default=1, ge=1)
+    max_concurrent_requests: int = Field(default=4, ge=1)
     max_retries: int = Field(default=2, ge=0)
+    rate_limit_cooldown_seconds: int = Field(default=180, ge=1)
     timeout_seconds: int = Field(default=120, ge=1)
     prompt_version: str = "phase3-function-analysis-v1"
     schema_version: str = "phase3-function-analysis-v1"
@@ -356,6 +357,7 @@ def load_config_file(path: Path) -> ApplicationConfig:
         "max_functions",
         "max_concurrent_requests",
         "max_retries",
+        "rate_limit_cooldown_seconds",
         "timeout_seconds",
         "prompt_version",
         "schema_version",

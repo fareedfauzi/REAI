@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from threading import Lock
 from typing import Callable
 from uuid import uuid4
 
@@ -11,7 +14,7 @@ from reai.ai.client import AIClient, create_ai_client
 from reai.ai.confidence import calibrate_confidence
 from reai.ai.context import FunctionContextBuilder
 from reai.ai.export import export_ai_artifacts
-from reai.ai.ordering import build_bottom_up_groups, select_target_addresses
+from reai.ai.ordering import build_bottom_up_groups, include_target_callees, select_target_addresses
 from reai.ai.prompts import build_function_prompt
 from reai.ai.schemas import (
     AIAnalysisStats,
@@ -42,6 +45,9 @@ class BottomUpAIAnalyzer:
         self.repository = repository
         self.workspace = workspace
         self.progress_callback = progress_callback
+        self._progress_lock = Lock()
+        self._rate_limit_lock = Lock()
+        self._rate_limit_until = 0.0
         self.context_builder = FunctionContextBuilder(
             repository,
             workspace,
@@ -56,17 +62,29 @@ class BottomUpAIAnalyzer:
 
         self._progress("selecting target functions")
         target_rows = self.repository.list_ai_targets(sample_id)
-        target_addresses = select_target_addresses(target_rows, max_functions=self.config.max_functions)
-        self._progress(f"selected {len(target_addresses)} target functions")
-        target_by_address = {row["address"]: row for row in target_rows if row["address"] in target_addresses}
+        all_target_addresses = select_target_addresses(target_rows)
+        seed_addresses = select_target_addresses(target_rows, max_functions=self.config.max_functions)
         self._progress("loading call graph order")
         calls = self.repository.list_function_calls(sample_id)
+        target_addresses = include_target_callees(seed_addresses, all_target_addresses, calls)
+        if len(target_addresses) > len(seed_addresses):
+            self._progress(
+                f"selected {len(seed_addresses)} seed functions plus "
+                f"{len(target_addresses) - len(seed_addresses)} target callee dependencies"
+            )
+        else:
+            self._progress(f"selected {len(target_addresses)} target functions")
+        target_by_address = {row["address"]: row for row in target_rows if row["address"] in target_addresses}
         components = self.repository.list_callgraph_components(sample_id)
         groups = build_bottom_up_groups(target_addresses, calls, components)
         context_truncated = 0
+        worker_count = max(1, int(self.config.max_concurrent_requests or 1))
+        if worker_count > 1:
+            self._progress(f"using up to {worker_count} concurrent AI requests per dependency group")
 
         analyzed_index = 0
         for group in groups:
+            pending = []
             for address in group:
                 analyzed_index += 1
                 existing = self.repository.get_function_ai_analysis(sample_id, address)
@@ -75,13 +93,38 @@ class BottomUpAIAnalyzer:
                     continue
                 function_row = target_by_address[address]
                 self._progress(
-                    f"analyzing function {analyzed_index}/{len(target_addresses)}: "
+                    f"queueing function {analyzed_index}/{len(target_addresses)}: "
                     f"{function_row['name']} ({address})"
                 )
                 context = self.context_builder.build(sample_id, address)
                 if context.context_truncated:
                     context_truncated += 1
-                self._analyze_one(sample_id, function_row, context, client)
+                pending.append((analyzed_index, function_row, context))
+
+            if not pending:
+                continue
+            if worker_count == 1 or len(pending) == 1:
+                for index, function_row, context in pending:
+                    self._progress(
+                        f"analyzing function {index}/{len(target_addresses)}: "
+                        f"{function_row['name']} ({function_row['address']})"
+                    )
+                    self._analyze_one(sample_id, function_row, context, client)
+                continue
+
+            self._progress(f"analyzing {len(pending)} functions concurrently")
+            with ThreadPoolExecutor(max_workers=min(worker_count, len(pending))) as executor:
+                futures = {
+                    executor.submit(self._analyze_one, sample_id, function_row, context, client): (index, function_row)
+                    for index, function_row, context in pending
+                }
+                for future in as_completed(futures):
+                    index, function_row = futures[future]
+                    future.result()
+                    self._progress(
+                        f"completed function {index}/{len(target_addresses)}: "
+                        f"{function_row['name']} ({function_row['address']})"
+                    )
 
         self._progress("exporting AI findings")
         stats = self.repository.calculate_ai_stats(sample_id, target_count=len(target_addresses))
@@ -97,6 +140,7 @@ class BottomUpAIAnalyzer:
         last_error: Exception | None = None
         for retry in range(self.config.max_retries + 1):
             try:
+                self._wait_for_rate_limit_window(address)
                 response = client.analyze_function(context, analysis_pass=1, retry_count=retry)
                 response.result.address = address
                 self.repository.persist_ai_request(sample_id, response.request)
@@ -139,9 +183,18 @@ class BottomUpAIAnalyzer:
                 if classify_exception(exc) == RetryClass.AUTHENTICATION:
                     raise AIProviderError(_safe_error(exc)) from exc
                 if retry < self.config.max_retries:
-                    # Exponential backoff: 2**retry seconds, capped at 64s.
-                    backoff = min(64, 2 ** retry)
-                    self._progress(f"retrying {address} after provider error ({retry + 1}/{self.config.max_retries})")
+                    retry_class = classify_exception(exc)
+                    if retry_class == RetryClass.RATE_LIMITED:
+                        backoff = self._rate_limit_delay_seconds(exc)
+                        self._set_rate_limit_window(backoff)
+                        self._progress(
+                            f"rate limited while analyzing {address}; "
+                            f"waiting {int(backoff)}s before retry {retry + 1}/{self.config.max_retries}"
+                        )
+                    else:
+                        # Exponential backoff: 2**retry seconds, capped at 64s.
+                        backoff = min(64, 2 ** retry)
+                        self._progress(f"retrying {address} after provider error ({retry + 1}/{self.config.max_retries})")
                     time.sleep(backoff)
 
 
@@ -184,7 +237,28 @@ class BottomUpAIAnalyzer:
 
     def _progress(self, message: str) -> None:
         if self.progress_callback is not None:
-            self.progress_callback(message)
+            with self._progress_lock:
+                self.progress_callback(message)
+
+    def _wait_for_rate_limit_window(self, address: str) -> None:
+        while True:
+            with self._rate_limit_lock:
+                delay = max(0.0, self._rate_limit_until - time.monotonic())
+            if delay <= 0:
+                return
+            self._progress(f"waiting {int(delay)}s for AI rate-limit cooldown before {address}")
+            time.sleep(min(delay, 30.0))
+
+    def _set_rate_limit_window(self, delay_seconds: float) -> None:
+        until = time.monotonic() + max(1.0, delay_seconds)
+        with self._rate_limit_lock:
+            self._rate_limit_until = max(self._rate_limit_until, until)
+
+    def _rate_limit_delay_seconds(self, exc: Exception) -> float:
+        provider_delay = extract_retry_after_seconds(exc)
+        if provider_delay is not None:
+            return provider_delay
+        return float(self.config.rate_limit_cooldown_seconds)
 
 
 def _fingerprint_context(context) -> str:
@@ -197,3 +271,49 @@ def _safe_error(error: Exception | None) -> str:
         return "Unknown error."
     message = str(error)
     return message[:1000] if message else type(error).__name__
+
+
+def extract_retry_after_seconds(error: Exception) -> float | None:
+    direct = getattr(error, "retry_after", None)
+    parsed = _coerce_retry_after(direct)
+    if parsed is not None:
+        return parsed
+
+    response = getattr(error, "response", None)
+    headers = getattr(response, "headers", None) if response is not None else None
+    parsed = _retry_after_from_headers(headers)
+    if parsed is not None:
+        return parsed
+
+    headers = getattr(error, "headers", None)
+    parsed = _retry_after_from_headers(headers)
+    if parsed is not None:
+        return parsed
+
+    match = re.search(r"retry(?:\s|-)?after[^\d]*(\d+(?:\.\d+)?)", str(error), flags=re.IGNORECASE)
+    if match:
+        return max(1.0, float(match.group(1)))
+    return None
+
+
+def _retry_after_from_headers(headers) -> float | None:
+    if not headers:
+        return None
+    for key in ("retry-after", "Retry-After", "x-ratelimit-reset-after", "X-RateLimit-Reset-After"):
+        try:
+            value = headers.get(key)
+        except AttributeError:
+            value = headers[key] if key in headers else None
+        parsed = _coerce_retry_after(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _coerce_retry_after(value) -> float | None:
+    if value is None:
+        return None
+    try:
+        return max(1.0, float(value))
+    except (TypeError, ValueError):
+        return None

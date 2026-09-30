@@ -12,6 +12,28 @@ def select_target_addresses(target_rows: list[dict], *, max_functions: int | Non
     return addresses
 
 
+def include_target_callees(seed_addresses: list[str], all_target_addresses: list[str], calls: list[dict]) -> list[str]:
+    target_set = set(all_target_addresses)
+    selected = set(seed_addresses)
+    pending = list(seed_addresses)
+
+    callees_by_caller: dict[str, set[str]] = defaultdict(set)
+    for call in calls:
+        caller = call["caller"]
+        callee = call["callee"]
+        if caller in target_set and callee in target_set:
+            callees_by_caller[caller].add(callee)
+
+    while pending:
+        caller = pending.pop()
+        for callee in sorted(callees_by_caller.get(caller, set())):
+            if callee not in selected:
+                selected.add(callee)
+                pending.append(callee)
+
+    return [address for address in all_target_addresses if address in selected]
+
+
 def _target_sort_key(row: dict) -> tuple[int, int | str]:
     has_pseudocode = row.get("decompilation_status") == "success" and bool(row.get("pseudocode_path"))
     try:
@@ -64,17 +86,23 @@ def build_bottom_up_groups(
             indegree[caller_component] += 1
 
     queue = deque(sorted(component for component, degree in indegree.items() if degree == 0))
-    ordered_components: list[int] = []
+    ordered_layers: list[list[int]] = []
     while queue:
-        component = queue.popleft()
-        ordered_components.append(component)
-        for parent in sorted(component_edges.get(component, set())):
-            indegree[parent] -= 1
-            if indegree[parent] == 0:
-                queue.append(parent)
+        layer = sorted(queue)
+        queue.clear()
+        ordered_layers.append(layer)
+        for component in layer:
+            for parent in sorted(component_edges.get(component, set())):
+                indegree[parent] -= 1
+                if indegree[parent] == 0:
+                    queue.append(parent)
 
+    ordered_components = {component for layer in ordered_layers for component in layer}
     if len(ordered_components) != len(nodes_by_component):
-        remaining = sorted(set(nodes_by_component) - set(ordered_components))
-        ordered_components.extend(remaining)
+        remaining = sorted(set(nodes_by_component) - ordered_components)
+        ordered_layers.append(remaining)
 
-    return [sorted(nodes_by_component[component]) for component in ordered_components]
+    return [
+        sorted(node for component in layer for node in nodes_by_component[component])
+        for layer in ordered_layers
+    ]

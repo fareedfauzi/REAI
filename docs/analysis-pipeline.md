@@ -137,7 +137,10 @@ Phase 3: creating AI client
 Phase 3: selecting target functions
 Phase 3: selected 1468 target functions
 Phase 3: loading call graph order
-Phase 3: analyzing function 58/1468: sub_140015500 (0x140015500)
+Phase 3: using up to 4 concurrent AI requests per dependency group
+Phase 3: queueing function 58/1468: sub_140015500 (0x140015500)
+Phase 3: analyzing 4 functions concurrently
+Phase 3: rate limited while analyzing 0x140015500; waiting 180s before retry 1/2
 Phase 3: retrying 0x140015500 after provider error (1/2)
 Phase 3: exporting AI findings
 Phase 3: AI function analysis complete
@@ -146,10 +149,13 @@ Phase 3: AI function analysis complete
 What it does:
 
 - Selects target functions, primarily unnamed `sub_*` functions, entry-point-related functions, callback-like functions, and functions with extracted code context.
+- When `ai.max_functions` limits the seed list, REAI still adds target callee dependencies so selected callers can receive already-analyzed child context.
 - Orders analysis bottom-up using the call graph, so callees are analyzed before callers where possible.
+- Analyzes independent functions in the same dependency layer concurrently, bounded by `ai.max_concurrent_requests`.
 - Treats recursive cycles as strongly connected components.
 - Builds compact context for each function: pseudocode or disassembly, imports, strings, globals, callers, callees, child findings, types, and segment information.
 - Sends each function context to the configured AI provider.
+- Pauses and retries when the provider returns a rate-limit error, using `Retry-After` when available or `ai.rate_limit_cooldown_seconds` otherwise.
 - Stores proposed names, summaries, behaviors, capabilities, artifacts, variables, types, confidence, evidence, and unknowns.
 - Records request metadata, retries, failures, and token/timing usage where available.
 

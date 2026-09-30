@@ -211,10 +211,11 @@ class OpenAICompatibleClient:
         start = time.perf_counter()
         prompt = build_function_prompt(context)
         content = self._complete_json(prompt)
-        result = _parse_function_analysis(content)
-        usage = getattr(self._last_response, "usage", None)
+        response = content["response"]
+        result = _parse_function_analysis(content["text"])
+        usage = getattr(response, "usage", None)
         request = AIRequestMetadata(
-            request_id=getattr(self._last_response, "id", str(uuid4())),
+            request_id=getattr(response, "id", str(uuid4())),
             provider=self.config.provider,
             model=self.config.model,
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -232,14 +233,14 @@ class OpenAICompatibleClient:
     def model_info(self) -> dict:
         return {"provider": self.config.provider, "model": self.config.model, "base_url": _openai_compatible_base_url(self.config)}
 
-    def _complete_json(self, prompt: str) -> str:
+    def _complete_json(self, prompt: str) -> dict:
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": f"{prompt}\n\nReturn only one JSON object matching the requested schema."},
         ]
         schema = FunctionAnalysisResult.model_json_schema()
         try:
-            self._last_response = self._client.chat.completions.create(
+            response = self._client.chat.completions.create(
                 model=self.config.model,
                 messages=messages,
                 temperature=0,
@@ -253,17 +254,17 @@ class OpenAICompatibleClient:
                 },
             )
         except Exception:
-            self._last_response = self._client.chat.completions.create(
+            response = self._client.chat.completions.create(
                 model=self.config.model,
                 messages=messages,
                 temperature=0,
                 response_format={"type": "json_object"},
             )
-        choice = self._last_response.choices[0]
+        choice = response.choices[0]
         content = getattr(choice.message, "content", None)
         if not content:
             raise AIProviderError(f"{self.config.provider} returned an empty response.")
-        return content
+        return {"text": content, "response": response}
 
 
 class AnthropicClient:

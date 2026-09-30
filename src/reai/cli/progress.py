@@ -25,7 +25,14 @@ PHASE_TITLES: dict[int, str] = {
     7: "generating analysis report",
 }
 
-_PHASE_RE = re.compile(r"^(?:(?P<sample>.+?):\s*)?Phase\s+(?P<phase>[1-7]):\s*(?P<detail>.+)$")
+ENRICHIDB_PHASE_TITLES: dict[int, str] = {
+    1: "discovering sample and preparing workspace",
+    2: "extracting IDA functions and code context",
+    3: "analyzing functions for names, variables, and comments",
+    4: "saving renamed and commented analyzed IDB",
+}
+
+_PHASE_RE = re.compile(r"^(?:(?P<sample>.+?):\s*)?Phase\s+(?P<phase>\d+):\s*(?P<detail>.+)$")
 
 
 def _can_encode(value: str) -> bool:
@@ -50,12 +57,14 @@ class PhaseLine:
 
 
 class PhaseProgress:
-    def __init__(self, initial_message: str = "Starting REAI analysis...") -> None:
+    def __init__(self, initial_message: str = "Starting REAI analysis...", *, phase_titles: dict[int, str] | None = None) -> None:
         self.sample_name: str | None = None
         self.current_message = initial_message
-        self.lines = {phase: PhaseLine(detail=detail) for phase, detail in PHASE_TITLES.items()}
+        self.phase_titles = dict(phase_titles or PHASE_TITLES)
+        self.lines = {phase: PhaseLine(detail=detail) for phase, detail in self.phase_titles.items()}
         self.active_phase: int | None = 1
-        self.lines[1].status = "running"
+        if 1 in self.lines:
+            self.lines[1].status = "running"
 
     def update(self, message: str) -> None:
         self.current_message = message
@@ -75,10 +84,12 @@ class PhaseProgress:
         sample = match.group("sample")
         phase = int(match.group("phase"))
         detail = match.group("detail").strip()
+        if phase not in self.lines:
+            return
         if sample:
             self.sample_name = sample
 
-        for previous in range(1, phase):
+        for previous in sorted(item for item in self.lines if item < phase):
             if self.lines[previous].status != "failed":
                 self.lines[previous].status = "done"
 
@@ -101,15 +112,19 @@ class PhaseProgress:
             title.append(escape(self.current_message), style="bold cyan")
 
         rows = [title]
-        for phase in range(1, 8):
+        for phase in sorted(self.lines):
             line = self.lines[phase]
             rows.append(_render_phase_line(phase, line, running=phase == self.active_phase))
         return Group(*rows)
 
 
 @contextmanager
-def phase_progress(initial_message: str = "Starting REAI analysis...") -> Iterator[PhaseProgress]:
-    progress = PhaseProgress(initial_message)
+def phase_progress(
+    initial_message: str = "Starting REAI analysis...",
+    *,
+    phase_titles: dict[int, str] | None = None,
+) -> Iterator[PhaseProgress]:
+    progress = PhaseProgress(initial_message, phase_titles=phase_titles)
     with Live(progress.render(), console=console, refresh_per_second=10, transient=False) as live:
         original_update = progress.update
 

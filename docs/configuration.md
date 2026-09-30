@@ -27,6 +27,10 @@ path = "C:/Program Files/IDA Professional 9.3"
 provider = "openai"
 model = "gpt-4o-mini"
 api-key = ""
+# Optional: Phase 3 concurrent function analyses per dependency layer.
+max_concurrent_requests = 4
+# Optional: fallback wait when the provider rate-limits without Retry-After.
+rate_limit_cooldown_seconds = 180
 ```
 
 You can also write the same config as simple top-level keys:
@@ -66,6 +70,10 @@ Phase 3 targets functions with recovered pseudocode or disassembly, plus normal 
 | `lmstudio` | OpenAI-format local endpoint, defaults to `http://localhost:1234/v1`. |
 | `ollama` | OpenAI-format local endpoint, defaults to `http://localhost:11434/v1`. |
 | `hermes` | OpenAI-format local endpoint, defaults to `http://localhost:8080/v1`. |
+
+`ai.max_concurrent_requests` controls bounded Phase 3 parallelism. REAI still respects bottom-up call-graph ordering: callees are analyzed before callers, but independent functions in the same dependency layer can be analyzed concurrently. Set it to `1` for strict serial mode or when a local model/server cannot handle concurrent requests.
+
+When the AI provider returns a rate-limit error, REAI pauses Phase 3 requests and retries. If the provider sends `Retry-After`, REAI uses that value. Otherwise it waits `ai.rate_limit_cooldown_seconds`, which defaults to 180 seconds.
 
 For custom OpenAI-format servers:
 

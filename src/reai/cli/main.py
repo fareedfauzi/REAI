@@ -8,7 +8,7 @@ import typer
 
 from reai import __version__
 from reai.cli.console import render_error, render_result
-from reai.cli.progress import phase_progress
+from reai.cli.progress import ENRICHIDB_PHASE_TITLES, phase_progress
 from reai.core.config import build_config
 from reai.core.exceptions import ReaiError
 from reai.core.orchestrator import AnalysisOrchestrator
@@ -35,6 +35,7 @@ def main(
     config: Optional[Path] = typer.Option(None, "--config", help="TOML configuration file."),
     max_functions: Optional[int] = typer.Option(None, "--max-functions", min=1, help="Development limit for Phase 3 AI target count.", hidden=True),
     no_mcp: bool = typer.Option(False, "--no-mcp", help="Run in degraded bulk-extraction-only investigation mode without live MCP.", hidden=True),
+    enrichidb: bool = typer.Option(False, "--enrichidb", help="Only rename sub_* functions, rename variables, add function comments, and save analyzed IDB."),
     verbose: bool = typer.Option(False, "--verbose", help="Show additional debugging information."),
     version: bool = typer.Option(False, "--version", callback=_version_callback, is_eager=True, help="Show version and exit."),
 ) -> None:
@@ -49,10 +50,13 @@ def main(
             max_functions=max_functions,
             no_mcp=no_mcp,
         )
-        with phase_progress("Starting REAI analysis...") as progress:
+        initial_message = "Starting REAI IDB enrichment..." if enrichidb else "Starting REAI analysis..."
+        phase_titles = ENRICHIDB_PHASE_TITLES if enrichidb else None
+        with phase_progress(initial_message, phase_titles=phase_titles) as progress:
             orchestrator = AnalysisOrchestrator(
                 app_config,
                 progress_callback=progress.update,
+                enrich_idb_only=enrichidb,
             )
             result = orchestrator.analyze(input_path)
         render_result(result)
