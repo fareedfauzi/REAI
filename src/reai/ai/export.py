@@ -4,6 +4,7 @@ import json
 
 from reai.ai.schemas import AIAnalysisStats
 from reai.extraction.serialization import write_json
+from reai.reporting.findings import write_ai_findings
 from reai.storage.repository import AnalysisRepository
 from reai.utils.paths import WorkspacePaths
 
@@ -33,3 +34,4 @@ def export_ai_artifacts(repository: AnalysisRepository, sample_id: str, workspac
     write_json(workspace.analysis / "findings.json", {"findings": findings})
     write_json(workspace.analysis / "artifact_candidates.json", {"artifacts": repository.get_ai_artifact_rows(sample_id)})
     write_json(workspace.analysis / "ai_usage.json", {"requests": repository.get_ai_request_rows(sample_id), "stats": stats})
+    write_ai_findings(workspace, repository, sample_id, stats)

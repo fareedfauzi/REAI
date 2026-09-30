@@ -4,6 +4,7 @@ import json
 import logging
 from enum import StrEnum
 from pathlib import Path
+from typing import Callable
 
 from pydantic import BaseModel, ConfigDict
 
@@ -38,6 +39,39 @@ from reai.utils.redaction import redact_secrets
 from reai.utils.retry import RetryClass, classify_exception
 
 LOGGER = logging.getLogger("reai.orchestrator")
+
+
+ProgressCallback = Callable[[str], None]
+
+
+STATE_PROGRESS_MESSAGES: dict[SampleState, str] = {
+    SampleState.DISCOVERED: "Phase 1: sample discovered",
+    SampleState.INITIALIZING: "Phase 1: creating workspace and database",
+    SampleState.INITIALIZED: "Phase 1: initialization complete",
+    SampleState.IDA_ANALYSIS: "Phase 2: running IDA auto-analysis",
+    SampleState.EXTRACTING: "Phase 2: persisting bulk extraction",
+    SampleState.GRAPH_BUILDING: "Phase 2: building call graph metadata",
+    SampleState.READY_FOR_ANALYSIS: "Phase 2: deterministic extraction complete",
+    SampleState.ANALYZING: "Phase 3: running bottom-up AI function analysis",
+    SampleState.AI_ANALYZED: "Phase 3: AI analysis complete",
+    SampleState.INVESTIGATING: "Phase 4: running autonomous MCP investigation",
+    SampleState.MCP_INVESTIGATED: "Phase 4: MCP investigation complete",
+    SampleState.PROPAGATING: "Phase 5: propagating semantic context",
+    SampleState.VALIDATING: "Phase 5: validating malware understanding",
+    SampleState.VALIDATED: "Phase 5: semantic validation complete",
+    SampleState.ENRICHING: "Phase 6: enriching the IDB",
+    SampleState.ENRICHED: "Phase 6: IDB enrichment complete",
+    SampleState.REPORTING: "Phase 7: generating evidence-backed report",
+    SampleState.COMPLETE: "Phase 7: analysis complete",
+    SampleState.FAILED_IDA: "Phase 2: IDA analysis failed",
+    SampleState.FAILED_EXTRACTION: "Phase 2: extraction failed",
+    SampleState.FAILED_AI: "Phase 3: AI analysis failed",
+    SampleState.FAILED_MCP: "Phase 4: MCP investigation failed",
+    SampleState.FAILED_PROPAGATION: "Phase 5: propagation failed",
+    SampleState.FAILED_VALIDATION: "Phase 5: validation failed",
+    SampleState.FAILED_ENRICHMENT: "Phase 6: enrichment failed",
+    SampleState.FAILED_REPORT: "Phase 7: report generation failed",
+}
 
 
 class InputKind(StrEnum):
@@ -114,11 +148,13 @@ class AnalysisRunResult(BaseModel):
 
 
 class AnalysisOrchestrator:
-    def __init__(self, config: ApplicationConfig) -> None:
+    def __init__(self, config: ApplicationConfig, *, progress_callback: ProgressCallback | None = None) -> None:
         self.config = config
         self.output_root = config.output_dir
+        self._progress_callback = progress_callback
 
     def analyze(self, input_path: Path) -> AnalysisRunResult:
+        self._progress(f"Starting REAI analysis for {input_path}")
         started_at = utc_now().isoformat()
         batch_id = new_batch_id()
         result = self.initialize(input_path)
@@ -153,12 +189,27 @@ class AnalysisOrchestrator:
             result.completed_at = utc_now().isoformat()
             if result.input_kind == InputKind.DIRECTORY:
                 write_batch_outputs(result, batch_id=batch_id, started_at=started_at, completed_at=result.completed_at)
+            self._progress("REAI analysis finished")
         return result
+
+    def _progress(self, message: str) -> None:
+        if self._progress_callback is None:
+            return
+        self._progress_callback(message)
+
+    def _progress_state(self, item: SampleResult, state: SampleState) -> None:
+        self._progress_sample_state(item.sample.filename, state)
+
+    def _progress_sample_state(self, filename: str, state: SampleState) -> None:
+        label = STATE_PROGRESS_MESSAGES.get(state, state.value)
+        self._progress(f"{filename}: {label}")
 
     def _run_sample_pipeline(self, item: SampleResult) -> None:
         attempts = self.config.reliability.sample_retry_limit + 1
         for attempt in range(1, attempts + 1):
             try:
+                suffix = f" (attempt {attempt}/{attempts})" if attempts > 1 else ""
+                self._progress(f"{item.sample.filename}: starting analysis pipeline{suffix}")
                 self._run_phase2(item)
                 self._run_phase3(item)
                 self._run_phase4(item)
@@ -187,6 +238,7 @@ class AnalysisOrchestrator:
     def initialize(self, input_path: Path) -> AnalysisRunResult:
         LOGGER.info("startup")
         LOGGER.info("configuration output_dir=%s workers=%s recursive=%s", self.output_root, self.config.workers, self.config.recursive)
+        self._progress("Discovering input samples")
 
         resolved_input = input_path.expanduser()
         input_kind = self._detect_input_kind(resolved_input)
@@ -203,6 +255,7 @@ class AnalysisOrchestrator:
 
         for candidate in candidates:
             LOGGER.info("hashing %s", candidate)
+            self._progress(f"Hashing {candidate.name}")
             hashes = hash_file(candidate)
             existing = seen_sha256.get(hashes.sha256)
             if existing is not None:
@@ -300,6 +353,7 @@ class AnalysisOrchestrator:
             raise WorkspaceError(f"Unable to create output directory:\n{self.output_root}") from exc
 
     def _initialize_sample(self, source_path: Path, hashes) -> SampleResult:
+        self._progress(f"{source_path.name}: checking workspace")
         workspace = find_workspace_by_sha256(self.output_root, hashes.sha256)
         existing = workspace is not None
         if workspace is None:
@@ -314,16 +368,21 @@ class AnalysisOrchestrator:
 
         if existing:
             self._verify_existing_workspace(workspace, hashes.sha256)
+            removed_legacy_dirs = workspace.cleanup_legacy_empty_directories()
             configure_logging(workspace.logs / "reai.log", verbose=self.config.verbose)
             LOGGER.info("startup")
             LOGGER.info("configuration output_dir=%s workers=%s recursive=%s", self.output_root, self.config.workers, self.config.recursive)
             LOGGER.info("input discovery source=%s", source_path)
             LOGGER.info("hashing complete sha256=%s size=%s", hashes.sha256, hashes.size)
             LOGGER.info("existing workspace detected %s", workspace.root)
+            for legacy_dir in removed_legacy_dirs:
+                LOGGER.info("removed empty legacy workspace directory %s", legacy_dir)
+            self._progress(f"{source_path.name}: resuming existing workspace")
             configure_logging(None, verbose=self.config.verbose)
             return SampleResult(sample=sample, workspace=workspace, status=ResultStatus.EXISTING)
 
         LOGGER.info("workspace creation %s", workspace.root)
+        self._progress(f"{source_path.name}: creating workspace")
         try:
             workspace.create_directories()
         except OSError as exc:
@@ -340,6 +399,7 @@ class AnalysisOrchestrator:
         repository = AnalysisRepository(workspace.database)
         repository.create_sample(sample)
         LOGGER.info("state transition %s", SampleState.DISCOVERED)
+        self._progress_sample_state(sample.filename, SampleState.DISCOVERED)
         repository.record_state_transition(
             sample.sample_id,
             None,
@@ -347,6 +407,7 @@ class AnalysisOrchestrator:
             message="Sample discovered and identity calculated.",
         )
         LOGGER.info("state transition %s", SampleState.INITIALIZING)
+        self._progress_sample_state(sample.filename, SampleState.INITIALIZING)
         repository.update_sample_state(
             sample.sample_id,
             SampleState.INITIALIZING,
@@ -368,6 +429,7 @@ class AnalysisOrchestrator:
         LOGGER.info("job created %s", job.job_id)
 
         LOGGER.info("state transition %s", SampleState.INITIALIZED)
+        self._progress_sample_state(sample.filename, SampleState.INITIALIZED)
         repository.update_sample_state(
             sample.sample_id,
             SampleState.INITIALIZED,
@@ -452,6 +514,7 @@ class AnalysisOrchestrator:
         configure_logging(item.workspace.logs / "reai.log", verbose=self.config.verbose)
         try:
             LOGGER.info("state transition %s", SampleState.IDA_ANALYSIS)
+            self._progress_state(item, SampleState.IDA_ANALYSIS)
             repository.update_sample_state(
                 item.sample.sample_id,
                 SampleState.IDA_ANALYSIS,
@@ -461,6 +524,7 @@ class AnalysisOrchestrator:
             ida_result = ida_manager.analyze(item.sample.source_path, item.workspace)
 
             LOGGER.info("state transition %s", SampleState.EXTRACTING)
+            self._progress_state(item, SampleState.EXTRACTING)
             repository.update_sample_state(
                 item.sample.sample_id,
                 SampleState.EXTRACTING,
@@ -471,6 +535,7 @@ class AnalysisOrchestrator:
             LOGGER.info("extraction persisted")
 
             LOGGER.info("state transition %s", SampleState.GRAPH_BUILDING)
+            self._progress_state(item, SampleState.GRAPH_BUILDING)
             repository.update_sample_state(
                 item.sample.sample_id,
                 SampleState.GRAPH_BUILDING,
@@ -478,6 +543,7 @@ class AnalysisOrchestrator:
             )
 
             LOGGER.info("state transition %s", SampleState.READY_FOR_ANALYSIS)
+            self._progress_state(item, SampleState.READY_FOR_ANALYSIS)
             repository.update_sample_state(
                 item.sample.sample_id,
                 SampleState.READY_FOR_ANALYSIS,
@@ -528,6 +594,7 @@ class AnalysisOrchestrator:
         configure_logging(item.workspace.logs / "reai.log", verbose=self.config.verbose)
         try:
             LOGGER.info("state transition %s", SampleState.PROPAGATING)
+            self._progress_state(item, SampleState.PROPAGATING)
             repository.update_sample_state(
                 item.sample.sample_id,
                 SampleState.PROPAGATING,
@@ -538,12 +605,14 @@ class AnalysisOrchestrator:
             if stats is None:
                 return
             LOGGER.info("state transition %s", SampleState.VALIDATING)
+            self._progress_state(item, SampleState.VALIDATING)
             repository.update_sample_state(
                 item.sample.sample_id,
                 SampleState.VALIDATING,
                 message="Validating Phase 5 semantic model and change candidates.",
             )
             LOGGER.info("state transition %s", SampleState.VALIDATED)
+            self._progress_state(item, SampleState.VALIDATED)
             repository.update_sample_state(
                 item.sample.sample_id,
                 SampleState.VALIDATED,
@@ -589,6 +658,7 @@ class AnalysisOrchestrator:
         configure_logging(item.workspace.logs / "reai.log", verbose=self.config.verbose)
         try:
             LOGGER.info("state transition %s", SampleState.ENRICHING)
+            self._progress_state(item, SampleState.ENRICHING)
             repository.update_sample_state(
                 item.sample.sample_id,
                 SampleState.ENRICHING,
@@ -599,6 +669,7 @@ class AnalysisOrchestrator:
             if stats is None:
                 return
             LOGGER.info("state transition %s", SampleState.ENRICHED)
+            self._progress_state(item, SampleState.ENRICHED)
             repository.update_sample_state(
                 item.sample.sample_id,
                 SampleState.ENRICHED,
@@ -635,6 +706,7 @@ class AnalysisOrchestrator:
         configure_logging(item.workspace.logs / "reai.log", verbose=self.config.verbose)
         try:
             LOGGER.info("state transition %s", SampleState.REPORTING)
+            self._progress_state(item, SampleState.REPORTING)
             repository.update_sample_state(
                 item.sample.sample_id,
                 SampleState.REPORTING,
@@ -645,6 +717,7 @@ class AnalysisOrchestrator:
             if stats is None:
                 return
             LOGGER.info("state transition %s", SampleState.COMPLETE)
+            self._progress_state(item, SampleState.COMPLETE)
             repository.update_sample_state(
                 item.sample.sample_id,
                 SampleState.COMPLETE,
@@ -679,6 +752,7 @@ class AnalysisOrchestrator:
         configure_logging(item.workspace.logs / "reai.log", verbose=self.config.verbose)
         try:
             LOGGER.info("state transition %s", SampleState.ANALYZING)
+            self._progress_state(item, SampleState.ANALYZING)
             repository.update_sample_state(
                 item.sample.sample_id,
                 SampleState.ANALYZING,
@@ -693,6 +767,7 @@ class AnalysisOrchestrator:
                     "Phase 3 produced no successful function analyses; refusing to advance to semantic validation."
                 )
             LOGGER.info("state transition %s", SampleState.AI_ANALYZED)
+            self._progress_state(item, SampleState.AI_ANALYZED)
             repository.update_sample_state(
                 item.sample.sample_id,
                 SampleState.AI_ANALYZED,
@@ -729,6 +804,7 @@ class AnalysisOrchestrator:
         configure_logging(item.workspace.logs / "reai.log", verbose=self.config.verbose)
         try:
             LOGGER.info("state transition %s", SampleState.INVESTIGATING)
+            self._progress_state(item, SampleState.INVESTIGATING)
             repository.update_sample_state(
                 item.sample.sample_id,
                 SampleState.INVESTIGATING,
@@ -739,6 +815,7 @@ class AnalysisOrchestrator:
             if stats is None:
                 return
             LOGGER.info("state transition %s", SampleState.MCP_INVESTIGATED)
+            self._progress_state(item, SampleState.MCP_INVESTIGATED)
             repository.update_sample_state(
                 item.sample.sample_id,
                 SampleState.MCP_INVESTIGATED,

@@ -8,7 +8,7 @@ Give it a binary:
 python -m reai malware.exe
 ```
 
-REAI runs static analysis, exports IDA context, analyzes unnamed functions bottom-up, performs bounded MCP investigation when configured, validates findings, enriches a separate IDB copy, and writes a technical report.
+REAI runs static analysis, exports IDA context, analyzes unnamed functions bottom-up, uses targeted MCP queries to investigate important or unresolved behavior, validates findings, enriches a separate IDB copy, and writes a technical report.
 
 Primary outputs:
 
@@ -47,12 +47,13 @@ REAI automates that repetitive first pass and leaves the analyst with a more use
 - Headless IDA auto-analysis and bulk extraction.
 - Structured exports for functions, call graph, strings, imports, exports, globals, segments, types, xrefs, pseudocode, and disassembly.
 - Bottom-up analysis of unnamed `sub_*` functions using call-graph order and already-understood callees.
-- Structured OpenAI or deterministic mock AI provider.
+- OpenAI, Anthropic, and OpenAI-compatible AI providers for function understanding.
 - Confidence calibration, evidence storage, retry accounting, and token/timing metadata.
-- Optional bounded read-only MCP investigation for ambiguous functions.
+- Core bounded read-only MCP investigation for ambiguous or high-value functions.
+- Analytical-importance scoring and persisted investigation questions so high-confidence malware-relevant functions can still be inspected.
 - Multi-pass context propagation, subsystem/capability grouping, IOC and configuration extraction, command-handler recovery, and contradiction tracking.
 - Safe IDB enrichment into `ida/analyzed.i64`, preserving `ida/original.i64`.
-- Markdown, HTML, and simple text-based PDF report generation from validated facts.
+- Evidence-backed malware intelligence reports in Markdown, HTML, and PDF from validated facts.
 - Batch directory input, duplicate detection by SHA-256, per-sample failure isolation, workspace locks, automatic resume, redacted logs, and batch summary files.
 
 ## Requirements
@@ -60,8 +61,8 @@ REAI automates that repetitive first pass and leaves the analyst with a more use
 - Python 3.11 or newer.
 - IDA Pro with a command-line executable (`ida64`, `idat64`, `ida`, or equivalent) for real extraction.
 - Hex-Rays/decompiler support is needed for pseudocode. REAI records decompiler failures and still stores disassembly where extraction provides it.
-- OpenAI API access only if `[ai].provider = "openai"`.
-- No concrete live IDA MCP adapter is included yet. The current MCP provider is `mock`, used for deterministic tests and local development.
+- AI provider access for the provider you choose: OpenAI, Anthropic, or an OpenAI-compatible local endpoint such as LM Studio, Ollama, or Hermes.
+- Live MCP investigation is optional. REAI ships its own read-only `reai-mcp` backend, which serves REAI's Phase 2 extraction artifacts through an MCP-compatible HTTP interface. No third-party MCP server is required for the default workflow.
 
 REAI has been developed and tested in this repository on Windows. Other platforms may work if Python and IDA command-line execution are available, but they have not been verified here.
 
@@ -85,13 +86,13 @@ reai --help
 
 ## Configuration
 
-REAI uses built-in defaults, then an optional TOML file, then CLI overrides.
+REAI uses built-in defaults, then an optional TOML file, then CLI overrides. Everything in the analysis pipeline is enabled by default; users normally configure only IDA and AI.
 
 ```bash
 python -m reai malware.exe --config reai.example.toml -o ./case
 ```
 
-Minimal OpenAI configuration:
+Minimal configuration:
 
 ```toml
 [ida]
@@ -103,7 +104,7 @@ model = "gpt-4o-mini"
 api-key = ""
 ```
 
-Keep real API keys out of source control. If `api-key` is empty or omitted, the OpenAI SDK can use `OPENAI_API_KEY` from the environment.
+Supported providers are `openai`, `anthropic`, `openai-compatible`, `lmstudio`, `ollama`, and `hermes`. Keep real API keys out of source control. If `api-key` is empty or omitted, REAI uses the provider's normal environment variable.
 
 See [docs/configuration.md](docs/configuration.md) for the full configuration reference.
 
@@ -127,8 +128,6 @@ Directory batch:
 python -m reai ./samples
 python -m reai ./samples --recursive
 ```
-
-`--workers` is accepted and recorded, but execution is currently conservative and single-process. Keep `workers = 1` unless you are extending the batch runner.
 
 ## Output Structure
 
@@ -170,10 +169,12 @@ See [docs/output-structure.md](docs/output-structure.md).
 
 ```text
 Sample -> IDA extraction -> call graph -> bottom-up AI analysis
-       -> optional MCP investigation -> validation -> IDB/report outputs
+       -> targeted MCP investigation -> validation -> IDB/report outputs
 ```
 
 REAI targets unnamed `sub_*` functions and avoids overwriting meaningful names unless validated policy marks a change as eligible. Calibrated confidence controls whether a finding becomes an IDB change. Low-confidence or contradictory findings are preserved for review rather than forced into the IDB.
+
+REAI performs a bottom-up first-pass analysis of IDA functions and uses targeted MCP queries to investigate important or unresolved behavior. It can inspect callers, callees, cross-references, pseudocode, disassembly, data and other IDA context to refine function findings before generating an enriched IDB and malware-analysis report.
 
 Details:
 
@@ -195,34 +196,34 @@ The public CLI currently has one command:
 python -m reai [OPTIONS] INPUT
 ```
 
-Options:
+Common options:
 
 - `-o, --output PATH`: output root directory.
 - `--recursive`: recursively discover files for directory input.
-- `--workers INTEGER`: accepted for batch configuration; currently reserved for later parallel execution.
 - `--config PATH`: TOML configuration file.
-- `--max-functions INTEGER`: development limit for Phase 3 AI target count.
 - `--verbose`: show detailed tracebacks on terminal errors and enable debug logging.
 - `--version`: print version.
 - `-h, --help`: print help.
 
 There are no separate `doctor`, `status`, `resume`, or `report` subcommands in version `0.1.0`.
 
+Developer-only switches still exist for test and recovery workflows, but the intended user command is simply `reai sample.exe`.
+
 ## Reports
 
-REAI generates reports from validated structured state, not by asking the model to write a final narrative. Outputs are:
+REAI generates reports from validated structured state, not by asking the model to write a final narrative or by dumping every database row. The report engine synthesizes malware behavior from validated functions, artifacts, imports, execution flows, IDB-enrichment results, contradictions, and confidence labels. Outputs are:
 
 - `report/report.md`: portable source report.
 - `report/report.html`: standalone readable HTML.
 - `report/report.pdf`: simple shareable text PDF.
 
-Typical sections include Executive Summary, Sample Information, Technical Overview, Execution Flow, Configuration, behavior subsystems, Command Dispatch, Indicators of Compromise, MITRE ATT&CK Mapping, Important Functions, Recovered Types / Structures, Evidence and Confidence, Unresolved Behavior / Limitations, and Appendix. Sections with no supporting facts are omitted.
+Typical sections include Executive Assessment, Key Findings, Sample Profile, Malware Execution Chain, Technical Analysis, Reverse Engineering Findings, Threat Intelligence, Indicators, MITRE ATT&CK Mapping, Detection and Hunting, Analytical Gaps, and Appendix. Sections and claims with no supporting facts are omitted. ATT&CK, IOC roles, persistence, cleanup, and attribution language are evidence-gated; build artifacts such as PDB paths are reported as development context, not actor attribution.
 
 ## Security
 
 Treat analyzed files as untrusted malware. REAI does not intentionally execute the sample, launch extracted payloads, or perform sandboxed dynamic analysis, but IDA loaders and parsers still process attacker-controlled input. Run REAI in an isolated research environment.
 
-If OpenAI is enabled, function context derived from the binary may be sent to the configured model provider. REAI does not implement its own usage telemetry.
+Function context derived from the binary may be sent to the configured AI provider. REAI does not implement its own usage telemetry.
 
 See [SECURITY.md](SECURITY.md).
 
@@ -233,8 +234,10 @@ See [SECURITY.md](SECURITY.md).
 - Decompiler failures reduce available context.
 - Indirect calls and generated code can weaken call-graph ordering.
 - AI-generated names and explanations can be wrong.
-- MCP currently has only the mock provider in this repository.
-- `--workers` is reserved; process-level parallel batch execution is not implemented.
+- Static-only analysis cannot observe runtime-only configuration, packed code that was not unpacked, or behavior that depends on dynamic execution.
+- Indirect calls, obfuscation, and incomplete decompilation may leave investigation questions unresolved.
+- MCP evidence depends on IDA analysis quality and available backend tools.
+- REAI's owned `reai-mcp` backend depends on the quality of Phase 2 static extraction.
 - PDF output is intentionally simple.
 - A licensed IDA/Hex-Rays environment is required for real IDB extraction and enrichment verification.
 

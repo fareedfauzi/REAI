@@ -55,9 +55,10 @@ class IDAConfig(BaseModel):
 class AIConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True, populate_by_name=True)
 
-    provider: str = "disabled"
-    model: str | None = None
+    provider: str = "openai"
+    model: str | None = "gpt-4o-mini"
     api_key: str | None = Field(default=None, validation_alias=AliasChoices("api_key", "api-key"))
+    base_url: str | None = Field(default=None, validation_alias=AliasChoices("base_url", "base-url", "api_base", "api-base"))
     max_functions: int | None = Field(default=None, ge=1)
     max_concurrent_requests: int = Field(default=1, ge=1)
     max_retries: int = Field(default=2, ge=0)
@@ -67,12 +68,40 @@ class AIConfig(BaseModel):
     confidence_policy_version: str = "phase3-confidence-v1"
     context_builder_version: str = "phase3-context-v1"
 
+    @field_validator("provider")
+    @classmethod
+    def _validate_provider(cls, value: str) -> str:
+        lowered = value.lower().replace("_", "-")
+        aliases = {
+            "openai-compatible": "openai-compatible",
+            "openai-format": "openai-compatible",
+            "openai-format-compatible": "openai-compatible",
+            "lm-studio": "lmstudio",
+            "local": "openai-compatible",
+        }
+        normalized = aliases.get(lowered, lowered)
+        allowed = {"disabled", "mock", "simulation", "openai", "anthropic", "openai-compatible", "lmstudio", "ollama", "hermes"}
+        if normalized not in allowed:
+            raise ValueError(f"ai.provider must be one of: {', '.join(sorted(allowed))}")
+        return normalized
+
 
 class MCPConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    enabled: bool = False
-    provider: str = "disabled"
+    enabled: bool = True
+    provider: str = "reai"
+    command: str | None = "reai-mcp"
+    args: list[str] = Field(default_factory=list)
+    transport: str = "http"
+    host: str = "127.0.0.1"
+    port: int = Field(default=8745, ge=1, le=65535)
+    read_only: bool = True
+    failure_policy: str = "degraded"
+    database_mode: str = "prefer_headless"
+    require_database_open: bool = True
+    require_sample_identity: bool = False
+    allow_simulation_provider: bool = False
     max_functions: int | None = Field(default=None, ge=1)
     max_rounds_per_function: int = Field(default=5, ge=1)
     max_tool_calls_per_function: int = Field(default=20, ge=1)
@@ -93,8 +122,52 @@ class MCPConfig(BaseModel):
             "types",
             "function",
             "search",
+            "metadata",
+            "functions",
+            "strings",
+            "imports",
+            "exports",
+            "globals",
+            "structures",
+            "segments",
+            "basic_blocks",
+            "xref_to",
+            "xref_from",
         ]
     )
+
+    @field_validator("provider")
+    @classmethod
+    def _validate_provider(cls, value: str) -> str:
+        lowered = value.lower()
+        allowed = {"disabled", "reai", "reai-mcp", "internal", "simulation", "mock", "hexrays", "blacktop"}
+        if lowered not in allowed:
+            raise ValueError(f"mcp.provider must be one of: {', '.join(sorted(allowed))}")
+        return lowered
+
+    @field_validator("transport")
+    @classmethod
+    def _validate_transport(cls, value: str) -> str:
+        lowered = value.lower()
+        if lowered not in {"stdio", "http"}:
+            raise ValueError("mcp.transport must be one of: stdio, http")
+        return lowered
+
+    @field_validator("failure_policy")
+    @classmethod
+    def _validate_failure_policy(cls, value: str) -> str:
+        lowered = value.lower()
+        if lowered not in {"fail", "degraded"}:
+            raise ValueError("mcp.failure_policy must be one of: fail, degraded")
+        return lowered
+
+    @field_validator("database_mode")
+    @classmethod
+    def _validate_database_mode(cls, value: str) -> str:
+        lowered = value.lower()
+        if lowered not in {"prefer_headless", "force_headless", "prefer_gui", "force_gui"}:
+            raise ValueError("mcp.database_mode must be one of: prefer_headless, force_headless, prefer_gui, force_gui")
+        return lowered
 
 
 class PropagationConfig(BaseModel):
@@ -199,6 +272,12 @@ def load_config_file(path: Path) -> ApplicationConfig:
     except OSError as exc:
         raise ConfigError(f"Unable to read configuration file:\n{path}\n{exc}") from exc
 
+    simple_ida_path = raw.pop("ida_path", None)
+    simple_ai_provider = raw.pop("ai_provider", raw.pop("provider", None))
+    simple_ai_model = raw.pop("ai_model", raw.pop("model", None))
+    simple_ai_api_key = raw.pop("ai_api_key", raw.pop("api_key", raw.pop("api-key", None)))
+    simple_ai_base_url = raw.pop("ai_base_url", raw.pop("base_url", raw.pop("base-url", None)))
+
     allowed_top_level = {"output_dir", "workers", "recursive", "verbose", "batch", "ida", "ai", "mcp", "analysis", "enrichment", "report", "reliability"}
     unknown = sorted(set(raw) - allowed_top_level)
     if unknown:
@@ -215,6 +294,8 @@ def load_config_file(path: Path) -> ApplicationConfig:
     ida = raw.pop("ida", {})
     if not isinstance(ida, dict):
         raise ConfigError("Configuration section [ida] must be a table.")
+    if simple_ida_path is not None and not ida.get("path"):
+        ida["path"] = simple_ida_path
     allowed_ida = {"path", "timeout_seconds", "max_concurrent_instances", "database_extension"}
     unknown_ida = sorted(set(ida) - allowed_ida)
     if unknown_ida:
@@ -223,11 +304,24 @@ def load_config_file(path: Path) -> ApplicationConfig:
     ai = raw.pop("ai", {})
     if not isinstance(ai, dict):
         raise ConfigError("Configuration section [ai] must be a table.")
+    simple_ai = {
+        "provider": simple_ai_provider,
+        "model": simple_ai_model,
+        "api_key": simple_ai_api_key,
+        "base_url": simple_ai_base_url,
+    }
+    for key, value in simple_ai.items():
+        if value is not None and not ai.get(key):
+            ai[key] = value
     allowed_ai = {
         "provider",
         "model",
         "api_key",
         "api-key",
+        "base_url",
+        "base-url",
+        "api_base",
+        "api-base",
         "max_functions",
         "max_concurrent_requests",
         "max_retries",
@@ -247,6 +341,17 @@ def load_config_file(path: Path) -> ApplicationConfig:
     allowed_mcp = {
         "enabled",
         "provider",
+        "command",
+        "args",
+        "transport",
+        "host",
+        "port",
+        "read_only",
+        "failure_policy",
+        "database_mode",
+        "require_database_open",
+        "require_sample_identity",
+        "allow_simulation_provider",
         "max_functions",
         "max_rounds_per_function",
         "max_tool_calls_per_function",
@@ -404,6 +509,7 @@ def build_config(
     recursive: bool | None = None,
     verbose: bool = False,
     max_functions: int | None = None,
+    no_mcp: bool = False,
 ) -> ApplicationConfig:
     values = default_config().model_dump()
 
@@ -426,6 +532,10 @@ def build_config(
     if max_functions is not None:
         values.setdefault("ai", {})
         values["ai"]["max_functions"] = max_functions
+    if no_mcp:
+        values.setdefault("mcp", {})
+        values["mcp"]["enabled"] = False
+        values["mcp"]["failure_policy"] = "degraded"
 
     if values.get("ida") is None:
         values["ida"] = {}
@@ -444,6 +554,18 @@ def build_config(
     env_ida_path = os.environ.get("REAI_IDA_PATH") or os.environ.get("IDA_PATH")
     if env_ida_path and not values["ida"].get("path"):
         values["ida"]["path"] = env_ida_path
+    env_ai_provider = os.environ.get("REAI_AI_PROVIDER")
+    if env_ai_provider:
+        values["ai"]["provider"] = env_ai_provider
+    env_ai_model = os.environ.get("REAI_AI_MODEL")
+    if env_ai_model:
+        values["ai"]["model"] = env_ai_model
+    env_ai_base_url = os.environ.get("REAI_AI_BASE_URL") or os.environ.get("OPENAI_BASE_URL")
+    if env_ai_base_url:
+        values["ai"]["base_url"] = env_ai_base_url
+    env_ai_key = os.environ.get("REAI_AI_API_KEY")
+    if env_ai_key:
+        values["ai"]["api_key"] = env_ai_key
 
     try:
         return ApplicationConfig(**values)

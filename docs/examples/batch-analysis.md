@@ -31,5 +31,3 @@ campaign/
 ```
 
 Read `batch-report.md` first, then open each interesting sample's `report/report.pdf` and `ida/analyzed.i64`.
-
-`--workers` is accepted and stored in batch output, but process-level parallel execution is not implemented in this version.

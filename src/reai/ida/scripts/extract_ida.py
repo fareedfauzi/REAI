@@ -393,9 +393,9 @@ def main():
     ida_auto.auto_wait()
 
     workspace_root = Path(args["workspace_root"])
-    workspace_root.joinpath("analysis").mkdir(parents=True, exist_ok=True)
-    workspace_root.joinpath("raw").mkdir(parents=True, exist_ok=True)
-    workspace_root.joinpath("ida").mkdir(parents=True, exist_ok=True)
+    workspace_root.joinpath("Analysis Data").mkdir(parents=True, exist_ok=True)
+    workspace_root.joinpath("Raw Data").mkdir(parents=True, exist_ok=True)
+    workspace_root.joinpath("IDB Files").mkdir(parents=True, exist_ok=True)
 
     imports_by_address = collect_imports()
     strings_by_address = collect_strings()
@@ -453,4 +453,3 @@ if __name__ == "__main__":
             ida_pro.qexit(1)
         except Exception:
             sys.exit(1)
-

@@ -4,7 +4,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 10
 
 
 def connect_database(path: Path) -> sqlite3.Connection:
@@ -371,6 +371,55 @@ def initialize_database(path: Path) -> None:
                 completed_at TEXT,
                 error TEXT,
                 PRIMARY KEY(sample_id, function_address),
+                FOREIGN KEY(sample_id) REFERENCES samples(sample_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS mcp_sessions (
+                session_id TEXT PRIMARY KEY,
+                sample_id TEXT NOT NULL,
+                backend TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                transport TEXT NOT NULL,
+                connection_mode TEXT NOT NULL,
+                database TEXT,
+                ida_version TEXT,
+                backend_version TEXT,
+                read_only INTEGER NOT NULL,
+                sample_identity_verified INTEGER NOT NULL,
+                available_tools_json TEXT NOT NULL,
+                normalized_capabilities_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                error TEXT,
+                FOREIGN KEY(sample_id) REFERENCES samples(sample_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS mcp_capabilities (
+                session_id TEXT NOT NULL,
+                sample_id TEXT NOT NULL,
+                capability TEXT NOT NULL,
+                tool_name TEXT,
+                available INTEGER NOT NULL,
+                read_only INTEGER NOT NULL,
+                PRIMARY KEY(session_id, capability),
+                FOREIGN KEY(sample_id) REFERENCES samples(sample_id),
+                FOREIGN KEY(session_id) REFERENCES mcp_sessions(session_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS mcp_questions (
+                question_id TEXT PRIMARY KEY,
+                sample_id TEXT NOT NULL,
+                function_address TEXT NOT NULL,
+                question TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                priority TEXT NOT NULL,
+                status TEXT NOT NULL,
+                answer TEXT,
+                evidence_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT,
                 FOREIGN KEY(sample_id) REFERENCES samples(sample_id)
             );
 
@@ -825,4 +874,77 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
         connection.execute(
             "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
             (8, now),
+        )
+
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_sessions (
+            session_id TEXT PRIMARY KEY,
+            sample_id TEXT NOT NULL,
+            backend TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            transport TEXT NOT NULL,
+            connection_mode TEXT NOT NULL,
+            database TEXT,
+            ida_version TEXT,
+            backend_version TEXT,
+            read_only INTEGER NOT NULL,
+            sample_identity_verified INTEGER NOT NULL,
+            available_tools_json TEXT NOT NULL,
+            normalized_capabilities_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            error TEXT,
+            FOREIGN KEY(sample_id) REFERENCES samples(sample_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS mcp_capabilities (
+            session_id TEXT NOT NULL,
+            sample_id TEXT NOT NULL,
+            capability TEXT NOT NULL,
+            tool_name TEXT,
+            available INTEGER NOT NULL,
+            read_only INTEGER NOT NULL,
+            PRIMARY KEY(session_id, capability),
+            FOREIGN KEY(sample_id) REFERENCES samples(sample_id),
+            FOREIGN KEY(session_id) REFERENCES mcp_sessions(session_id)
+        );
+        """
+    )
+    applied_v9 = connection.execute(
+        "SELECT 1 FROM schema_migrations WHERE version = 9"
+    ).fetchone()
+    if applied_v9 is None:
+        connection.execute(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+            (9, now),
+        )
+
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_questions (
+            question_id TEXT PRIMARY KEY,
+            sample_id TEXT NOT NULL,
+            function_address TEXT NOT NULL,
+            question TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            priority TEXT NOT NULL,
+            status TEXT NOT NULL,
+            answer TEXT,
+            evidence_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            completed_at TEXT,
+            FOREIGN KEY(sample_id) REFERENCES samples(sample_id)
+        );
+        """
+    )
+    applied_v10 = connection.execute(
+        "SELECT 1 FROM schema_migrations WHERE version = 10"
+    ).fetchone()
+    if applied_v10 is None:
+        connection.execute(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+            (10, now),
         )

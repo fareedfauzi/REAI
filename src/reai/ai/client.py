@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime, timezone
 from typing import Protocol
@@ -35,6 +36,10 @@ def create_ai_client(config: AIConfig) -> AIClient | None:
         return SimulationAIClient(config)
     if provider == "openai":
         return OpenAIClient(config)
+    if provider == "anthropic":
+        return AnthropicClient(config)
+    if provider in {"openai-compatible", "lmstudio", "ollama", "hermes"}:
+        return OpenAICompatibleClient(config)
     raise AIProviderError(f"Unsupported AI provider:\n{config.provider}")
 
 
@@ -143,6 +148,9 @@ class OpenAIClient:
         kwargs = {}
         if self.config.api_key:
             kwargs["api_key"] = self.config.api_key
+        if self.config.base_url:
+            kwargs["base_url"] = self.config.base_url
+        kwargs["timeout"] = self.config.timeout_seconds
         self._client = OpenAI(**kwargs)
 
     def analyze_function(self, context: FunctionContext, *, analysis_pass: int, retry_count: int = 0) -> AIProviderResponse:
@@ -183,8 +191,186 @@ class OpenAIClient:
         return {"provider": "openai", "model": self.config.model}
 
 
+class OpenAICompatibleClient:
+    def __init__(self, config: AIConfig) -> None:
+        self.config = config
+        if not config.model:
+            raise AIProviderError(f"{config.provider} provider requires [ai].model.")
+        try:
+            from openai import OpenAI
+        except ImportError as exc:
+            raise AIProviderError("OpenAI Python SDK is required for OpenAI-compatible providers.") from exc
+        kwargs = {
+            "base_url": _openai_compatible_base_url(config),
+            "api_key": config.api_key or _default_local_api_key(config.provider),
+            "timeout": config.timeout_seconds,
+        }
+        self._client = OpenAI(**kwargs)
+
+    def analyze_function(self, context: FunctionContext, *, analysis_pass: int, retry_count: int = 0) -> AIProviderResponse:
+        start = time.perf_counter()
+        prompt = build_function_prompt(context)
+        content = self._complete_json(prompt)
+        result = _parse_function_analysis(content)
+        usage = getattr(self._last_response, "usage", None)
+        request = AIRequestMetadata(
+            request_id=getattr(self._last_response, "id", str(uuid4())),
+            provider=self.config.provider,
+            model=self.config.model,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            task="function_analysis",
+            function_address=context.function["address"],
+            analysis_pass=analysis_pass,
+            input_tokens=getattr(usage, "prompt_tokens", None) if usage else None,
+            output_tokens=getattr(usage, "completion_tokens", None) if usage else None,
+            latency_ms=int((time.perf_counter() - start) * 1000),
+            retry_count=retry_count,
+            success=True,
+        )
+        return AIProviderResponse(result=result, request=request)
+
+    def model_info(self) -> dict:
+        return {"provider": self.config.provider, "model": self.config.model, "base_url": _openai_compatible_base_url(self.config)}
+
+    def _complete_json(self, prompt: str) -> str:
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": f"{prompt}\n\nReturn only one JSON object matching the requested schema."},
+        ]
+        schema = FunctionAnalysisResult.model_json_schema()
+        try:
+            self._last_response = self._client.chat.completions.create(
+                model=self.config.model,
+                messages=messages,
+                temperature=0,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "FunctionAnalysisResult",
+                        "schema": schema,
+                        "strict": False,
+                    },
+                },
+            )
+        except Exception:
+            self._last_response = self._client.chat.completions.create(
+                model=self.config.model,
+                messages=messages,
+                temperature=0,
+                response_format={"type": "json_object"},
+            )
+        choice = self._last_response.choices[0]
+        content = getattr(choice.message, "content", None)
+        if not content:
+            raise AIProviderError(f"{self.config.provider} returned an empty response.")
+        return content
+
+
+class AnthropicClient:
+    def __init__(self, config: AIConfig) -> None:
+        self.config = config
+        if not config.model:
+            raise AIProviderError("Anthropic provider requires [ai].model.")
+        try:
+            from anthropic import Anthropic
+        except ImportError as exc:
+            raise AIProviderError("Anthropic Python SDK is not installed.") from exc
+        kwargs = {"timeout": config.timeout_seconds}
+        if config.api_key:
+            kwargs["api_key"] = config.api_key
+        if config.base_url:
+            kwargs["base_url"] = config.base_url
+        self._client = Anthropic(**kwargs)
+
+    def analyze_function(self, context: FunctionContext, *, analysis_pass: int, retry_count: int = 0) -> AIProviderResponse:
+        start = time.perf_counter()
+        prompt = build_function_prompt(context)
+        try:
+            response = self._client.messages.create(
+                model=self.config.model,
+                max_tokens=4096,
+                temperature=0,
+                system=SYSTEM_PROMPT,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f"{prompt}\n\nReturn only one JSON object matching the FunctionAnalysisResult schema.",
+                    }
+                ],
+            )
+        except Exception as exc:
+            raise AIProviderError(f"Anthropic request failed:\n{exc}") from exc
+        content = _anthropic_text(response)
+        result = _parse_function_analysis(content)
+        usage = getattr(response, "usage", None)
+        request = AIRequestMetadata(
+            request_id=getattr(response, "id", str(uuid4())),
+            provider="anthropic",
+            model=self.config.model,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            task="function_analysis",
+            function_address=context.function["address"],
+            analysis_pass=analysis_pass,
+            input_tokens=getattr(usage, "input_tokens", None) if usage else None,
+            output_tokens=getattr(usage, "output_tokens", None) if usage else None,
+            latency_ms=int((time.perf_counter() - start) * 1000),
+            retry_count=retry_count,
+            success=True,
+        )
+        return AIProviderResponse(result=result, request=request)
+
+    def model_info(self) -> dict:
+        return {"provider": "anthropic", "model": self.config.model}
+
+
 def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
+
+
+def _openai_compatible_base_url(config: AIConfig) -> str:
+    if config.base_url:
+        return config.base_url
+    defaults = {
+        "lmstudio": "http://localhost:1234/v1",
+        "ollama": "http://localhost:11434/v1",
+        "hermes": "http://localhost:8080/v1",
+    }
+    if config.provider in defaults:
+        return defaults[config.provider]
+    raise AIProviderError("OpenAI-compatible provider requires [ai].base_url unless provider is lmstudio, ollama, or hermes.")
+
+
+def _default_local_api_key(provider: str) -> str:
+    return "ollama" if provider == "ollama" else "reai-local"
+
+
+def _parse_function_analysis(content: str) -> FunctionAnalysisResult:
+    try:
+        return FunctionAnalysisResult.model_validate_json(content)
+    except ValueError:
+        start = content.find("{")
+        end = content.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise AIProviderError("AI provider did not return a JSON object.")
+        try:
+            data = json.loads(content[start : end + 1])
+            return FunctionAnalysisResult.model_validate(data)
+        except ValueError as exc:
+            raise AIProviderError(f"AI provider returned invalid function-analysis JSON:\n{exc}") from exc
+
+
+def _anthropic_text(response) -> str:
+    chunks = []
+    for block in getattr(response, "content", []) or []:
+        text = getattr(block, "text", None)
+        if text:
+            chunks.append(text)
+        elif isinstance(block, dict) and block.get("text"):
+            chunks.append(str(block["text"]))
+    text = "\n".join(chunks).strip()
+    if not text:
+        raise AIProviderError("Anthropic response did not contain text content.")
+    return text
 
 
 def _snake(value: str) -> str:

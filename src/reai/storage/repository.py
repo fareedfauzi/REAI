@@ -13,13 +13,20 @@ from reai.enrichment.schemas import EnrichmentChange, EnrichmentRun, EnrichmentS
 from reai.reporting.schemas import ReportRun, ReportSection, ReportStats
 from reai.extraction.models import ExtractionBundle
 from reai.mcp.schemas import (
+    AnalyticalImportance,
     MCPEvidence,
     MCPInvestigationStats,
+    MCPSessionMetadata,
     MCPToolResult,
+    READ_ONLY_CAPABILITIES,
+    InvestigationQuestion,
     InvestigationOutcome,
     InvestigationStatus,
     InvestigationTarget,
+    QuestionStatus,
 )
+from reai.mcp.importance import classify_importance
+from reai.mcp.questions import generate_investigation_questions
 from reai.storage.database import connect_database
 from reai.utils.address import format_address
 from reai.utils.names import is_ida_placeholder_name
@@ -58,6 +65,18 @@ def _mcp_priority(row: sqlite3.Row, unknowns: list[str]) -> tuple[float, str]:
         score += min(10, callee_count)
     score += max(0.0, (1.0 - confidence) * 20)
     return round(score, 3), ", ".join(reasons) or "low-priority investigation candidate"
+
+
+def _should_investigate(row: sqlite3.Row, importance: AnalyticalImportance, questions: list[InvestigationQuestion]) -> bool:
+    if row["status"] == "FAILED":
+        return True
+    if row["needs_investigation"] or row["confidence_label"] == "LOW":
+        return True
+    if importance == AnalyticalImportance.HIGH and questions:
+        return True
+    if importance == AnalyticalImportance.MEDIUM and row["confidence_label"] != "HIGH" and questions:
+        return True
+    return False
 
 
 class AnalysisRepository:
@@ -1014,20 +1033,53 @@ class AnalysisRepository:
                 LEFT JOIN function_calls callees
                   ON callees.sample_id = a.sample_id AND callees.caller = a.address
                 WHERE a.sample_id = ?
-                  AND (a.needs_investigation = 1 OR a.confidence_label = 'LOW' OR a.status = 'FAILED')
                 GROUP BY a.sample_id, a.address
                 ORDER BY a.address
                 """,
                 (sample_id,),
             ).fetchall()
 
+        import_usage = self.get_import_usage_by_function(sample_id)
         targets: list[InvestigationTarget] = []
         for row in rows:
             result = json.loads(row["result_json"])
             function = json.loads(row["function_record_json"])
             unknowns = list(result.get("unknowns") or [])
-            reasons = unknowns or ["Low-confidence or failed Phase 3 analysis."]
+            evidence = list(result.get("evidence") or [])
+            imports = import_usage.get(row["address"], [])
+            importance, importance_score, importance_reasons = classify_importance(
+                name=row["current_name"],
+                proposed_name=row["proposed_name"],
+                summary=row["summary"],
+                confidence_label=row["confidence_label"],
+                unknowns=unknowns,
+                evidence=evidence,
+                imports=imports,
+                caller_count=int(row["caller_count"] or 0),
+                callee_count=int(row["callee_count"] or 0),
+            )
+            questions = generate_investigation_questions(
+                sample_id=sample_id,
+                function_address=row["address"],
+                importance=importance,
+                name=row["current_name"],
+                proposed_name=row["proposed_name"],
+                summary=row["summary"],
+                unknowns=unknowns,
+                evidence=evidence,
+                imports=imports,
+                confidence_label=row["confidence_label"],
+            )
+            if not _should_investigate(row, importance, questions):
+                continue
+            reasons = [question.reason.value for question in questions] or unknowns or importance_reasons
             priority_score, priority_reason = _mcp_priority(row, unknowns)
+            if importance == AnalyticalImportance.HIGH:
+                priority_score += 60
+            elif importance == AnalyticalImportance.MEDIUM:
+                priority_score += 25
+            priority_score += min(20, len(questions) * 4)
+            priority_reason = ", ".join(dict.fromkeys([*importance_reasons, priority_reason]).keys())
             targets.append(
                 InvestigationTarget(
                     sample_id=sample_id,
@@ -1038,8 +1090,10 @@ class AnalysisRepository:
                     confidence=float(row["confidence"]),
                     confidence_label=row["confidence_label"],
                     unknowns=unknowns,
-                    evidence=list(result.get("evidence") or []),
+                    evidence=evidence,
                     investigation_reasons=reasons,
+                    investigation_questions=[question.question for question in questions],
+                    analytical_importance=importance,
                     analysis_pass=int(row["analysis_pass"]),
                     caller_count=int(row["caller_count"] or 0),
                     callee_count=int(row["callee_count"] or 0),
@@ -1061,6 +1115,155 @@ class AnalysisRepository:
                 (sample_id, function_address),
             ).fetchone()
         return dict(row) if row else None
+
+    def start_mcp_session(self, sample_id: str, metadata: MCPSessionMetadata, *, status: str = "RUNNING", error: str | None = None) -> None:
+        now = _dt(utc_now())
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO mcp_sessions (
+                    session_id, sample_id, backend, provider, transport, connection_mode,
+                    database, ida_version, backend_version, read_only,
+                    sample_identity_verified, available_tools_json,
+                    normalized_capabilities_json, status, started_at, completed_at, error
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+                """,
+                (
+                    metadata.session_id,
+                    sample_id,
+                    metadata.backend,
+                    metadata.provider,
+                    metadata.transport,
+                    metadata.connection_mode,
+                    metadata.database,
+                    metadata.ida_version,
+                    metadata.backend_version,
+                    int(metadata.read_only),
+                    int(metadata.sample_identity_verified),
+                    json.dumps(metadata.available_tools, sort_keys=True),
+                    json.dumps(metadata.normalized_capabilities, sort_keys=True),
+                    status,
+                    now,
+                    error,
+                ),
+            )
+            connection.execute("DELETE FROM mcp_capabilities WHERE session_id = ?", (metadata.session_id,))
+            for capability in metadata.normalized_capabilities:
+                connection.execute(
+                    """
+                    INSERT INTO mcp_capabilities (
+                        session_id, sample_id, capability, tool_name, available, read_only
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        metadata.session_id,
+                        sample_id,
+                        capability,
+                        None,
+                        1,
+                        int(capability in READ_ONLY_CAPABILITIES),
+                    ),
+                )
+            connection.commit()
+
+    def complete_mcp_session(self, session_id: str, *, status: str, error: str | None = None) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE mcp_sessions
+                SET status = ?, completed_at = ?, error = ?
+                WHERE session_id = ?
+                """,
+                (status, _dt(utc_now()), error, session_id),
+            )
+            connection.commit()
+
+    def get_mcp_session_rows(self, sample_id: str) -> list[dict]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM mcp_sessions WHERE sample_id = ? ORDER BY started_at",
+                (sample_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def upsert_mcp_questions(self, questions: list[InvestigationQuestion]) -> None:
+        if not questions:
+            return
+        now = _dt(utc_now())
+        with self._connect() as connection:
+            for question in questions:
+                connection.execute(
+                    """
+                    INSERT INTO mcp_questions (
+                        question_id, sample_id, function_address, question, reason,
+                        priority, status, answer, evidence_json, created_at,
+                        updated_at, completed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                    ON CONFLICT(question_id) DO UPDATE SET
+                        priority = excluded.priority,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        question.fingerprint(),
+                        question.sample_id,
+                        question.function_address,
+                        question.question,
+                        question.reason.value,
+                        question.priority.value,
+                        question.status.value,
+                        question.answer,
+                        json.dumps(question.evidence_json, sort_keys=True),
+                        now,
+                        now,
+                    ),
+                )
+            connection.commit()
+
+    def update_mcp_question_status(
+        self,
+        sample_id: str,
+        function_address: str,
+        question: str,
+        *,
+        status: QuestionStatus,
+        answer: str | None = None,
+        evidence: list[dict] | None = None,
+    ) -> None:
+        now = _dt(utc_now())
+        completed_at = now if status in {QuestionStatus.RESOLVED, QuestionStatus.PARTIALLY_RESOLVED, QuestionStatus.UNRESOLVED, QuestionStatus.FAILED} else None
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE mcp_questions
+                SET status = ?, answer = COALESCE(?, answer),
+                    evidence_json = CASE WHEN ? IS NULL THEN evidence_json ELSE ? END,
+                    updated_at = ?, completed_at = COALESCE(?, completed_at)
+                WHERE sample_id = ? AND function_address = ? AND question = ?
+                """,
+                (
+                    status.value,
+                    answer,
+                    json.dumps(evidence, sort_keys=True) if evidence is not None else None,
+                    json.dumps(evidence, sort_keys=True) if evidence is not None else None,
+                    now,
+                    completed_at,
+                    sample_id,
+                    function_address,
+                    question,
+                ),
+            )
+            connection.commit()
+
+    def get_mcp_question_rows(self, sample_id: str, function_address: str | None = None) -> list[dict]:
+        query = "SELECT * FROM mcp_questions WHERE sample_id = ?"
+        params: tuple = (sample_id,)
+        if function_address is not None:
+            query += " AND function_address = ?"
+            params = (sample_id, function_address)
+        query += " ORDER BY priority, created_at, question_id"
+        with self._connect() as connection:
+            rows = connection.execute(query, params).fetchall()
+        return [dict(row) for row in rows]
 
     def start_mcp_investigation(self, target: InvestigationTarget) -> None:
         now = _dt(utc_now())

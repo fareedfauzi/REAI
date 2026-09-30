@@ -6,6 +6,7 @@ from reai.core.exceptions import ExtractionError
 from reai.extraction.models import ExtractionBundle, ExtractionStats
 from reai.extraction.serialization import write_json
 from reai.extraction.stats import calculate_stats
+from reai.reporting.findings import write_extraction_findings
 from reai.utils.paths import WorkspacePaths
 
 
@@ -44,6 +45,7 @@ def export_bundle(workspace: WorkspacePaths, bundle: ExtractionBundle) -> Extrac
         },
     )
     write_json(workspace.raw / "xrefs.json", {"xrefs": bundle.xrefs})
+    write_extraction_findings(workspace, bundle, stats)
     return stats
 
 

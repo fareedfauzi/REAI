@@ -16,7 +16,7 @@ from reai.core.config import EnrichmentConfig, IDAConfig
 from reai.core.exceptions import EnrichmentError
 from reai.core.sample import Sample
 from reai.enrichment.export import export_changes
-from reai.enrichment.policy import assign_unique_names, build_function_comment, is_placeholder_name, merge_reai_comment, sanitize_ida_name
+from reai.enrichment.policy import assign_unique_names, build_function_comment, is_placeholder_name, merge_reai_comment, sanitize_ida_name, unique_ida_name
 from reai.enrichment.schemas import ChangeStatus, EnrichmentChange, EnrichmentRun, EnrichmentRunStatus, EnrichmentStats, IDBVerification
 from reai.ida.environment import detect_ida_environment, get_clean_ida_environment
 from reai.storage.repository import AnalysisRepository
@@ -294,9 +294,15 @@ class IDBEnricher:
         if not change.applied:
             self._skip(change, ChangeStatus.SKIPPED_CONFLICT, "Proposed name could not be normalized for IDA.")
             return
+        used = {
+            str(item.get("name") or "")
+            for address, item in state.get("functions", {}).items()
+            if address != change.address and item.get("name")
+        }
+        change.applied = unique_ida_name(change.applied, used)
         function["name"] = change.applied
         change.status = ChangeStatus.APPLIED
-        change.reason = "Function placeholder renamed."
+        change.reason = "Function placeholder renamed with collision-safe IDA name."
         change.timestamp = _now()
 
     def _apply_function_comment(self, state: dict[str, Any], change: EnrichmentChange) -> None:
@@ -326,10 +332,20 @@ class IDBEnricher:
             self._skip(change, ChangeStatus.SKIPPED_CONFLICT, "Proposed variable name could not be normalized.")
             return
         variables = function.setdefault("variables", {})
+        if variables.get(change.original) == proposed or change.original == proposed:
+            change.applied = proposed
+            change.status = ChangeStatus.APPLIED
+            change.reason = "Variable already has the proposed name."
+            change.timestamp = _now()
+            return
+        used = {str(name) for name in variables.keys()}
+        used.update(str(name) for name in variables.values())
+        used.discard(str(change.original))
+        proposed = unique_ida_name(proposed, used)
         variables[change.original] = proposed
         change.applied = proposed
         change.status = ChangeStatus.APPLIED
-        change.reason = "Variable rename staged in manifest."
+        change.reason = "Variable rename staged in manifest with collision-safe local name."
         change.timestamp = _now()
 
     def _apply_structure_change(self, state: dict[str, Any], change: EnrichmentChange) -> None:

@@ -47,7 +47,7 @@ class InvestigationPlanner:
         target: InvestigationTarget,
         available_capabilities: set[MCPCapability],
     ) -> list[InvestigationAction]:
-        unknown_text = " ".join(target.unknowns + target.investigation_reasons).lower()
+        unknown_text = " ".join(target.investigation_questions + target.unknowns + target.investigation_reasons).lower()
         function = target.function
         actions: list[InvestigationAction] = []
 
@@ -64,6 +64,15 @@ class InvestigationPlanner:
 
         if function.get("decompilation_status") == "failed":
             add(MCPCapability.DISASSEMBLE, "Decompiler failed; inspect low-level instructions.")
+        if any(phrase in unknown_text for phrase in ("who calls", "what depends", "return value")):
+            add(MCPCapability.CALLERS, "Answer caller/dependency question.")
+        if any(phrase in unknown_text for phrase in ("what important functions", "what does it call", "callees")):
+            add(MCPCapability.CALLEES, "Answer callee relationship question.")
+        if any(phrase in unknown_text for phrase in ("where is", "where the", "referenced", "references", "xref", "used")):
+            add(MCPCapability.XREF_TO, "Answer artifact/string/global usage question.")
+            add(MCPCapability.XREF_FROM, "Inspect outbound references from this function.")
+        if any(phrase in unknown_text for phrase in ("primary purpose", "execution path", "what path", "what command")):
+            add(MCPCapability.DECOMPILE, "Inspect pseudocode for semantic behavior.")
         if any(word in unknown_text for word in ("body", "pseudocode", "decompile")):
             add(MCPCapability.DECOMPILE, "Retrieve targeted pseudocode for missing function body.")
         if "caller" in unknown_text or "return value" in unknown_text or target.caller_count > 5:
@@ -71,7 +80,13 @@ class InvestigationPlanner:
         if "callee" in unknown_text or "child" in unknown_text:
             add(MCPCapability.CALLEES, "Inspect unresolved child-function relationships.")
         if any(word in unknown_text for word in ("xref", "reference", "global", "string", "consumer", "usage")):
+            add(MCPCapability.XREF_TO, "Find inbound references that clarify data or function usage.")
+            add(MCPCapability.XREF_FROM, "Find outbound references that clarify data or function usage.")
             add(MCPCapability.XREFS, "Find references that clarify data or function usage.")
+        if any(word in unknown_text for word in ("url", "domain", "ioc", "indicator", "string")):
+            add(MCPCapability.STRINGS, "Recover nearby strings and xrefs for IOC context.")
+        if any(word in unknown_text for word in ("import", "api", "network", "process", "file")):
+            add(MCPCapability.IMPORTS, "Recover imported API context for behavior classification.")
         if "indirect" in unknown_text or "call target" in unknown_text:
             add(MCPCapability.DISASSEMBLE, "Inspect register setup around unresolved indirect call.")
             add(MCPCapability.XREFS, "Look for references that identify indirect-call targets.")
@@ -79,6 +94,7 @@ class InvestigationPlanner:
             add(MCPCapability.CFG, "Inspect control-flow structure for ambiguous paths.")
         if any(word in unknown_text for word in ("type", "prototype", "struct", "field")):
             add(MCPCapability.TYPES, "Inspect prototype or type information.")
+            add(MCPCapability.STRUCTURES, "Inspect structure definitions and field metadata.")
         if any(word in unknown_text for word in ("memory", "bytes", "table", "data")):
             add(MCPCapability.DATA, "Read static data bytes or table metadata.")
 
@@ -94,4 +110,3 @@ def _expected_gain(actions: list[InvestigationAction]) -> str:
         return "No available non-duplicate MCP action can materially improve this finding."
     names = ", ".join(action.capability.value for action in actions)
     return f"Targeted {names} evidence may resolve unknowns without broad re-extraction."
-

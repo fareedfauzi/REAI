@@ -9,6 +9,7 @@ description = "Autonomous first-pass malware reverse-engineering pipeline built 
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "anthropic>=0.40",
     "openai>=2",
     "pydantic>=2",
     "rich>=13",
@@ -17,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 reai = "reai.cli.main:app"
+reai-mcp = "reai.mcp.server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

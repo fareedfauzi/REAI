@@ -36,16 +36,17 @@ Fix:
 - Increase `[ida].timeout_seconds` for large binaries.
 - Check `logs/reai.log`.
 
-## OpenAI Credentials Missing
+## AI Credentials Missing
 
-Symptom: OpenAI provider fails before or during function analysis.
+Symptom: AI provider fails before or during function analysis.
 
-Likely cause: `[ai].provider = "openai"` without a usable API key.
+Likely cause: the selected provider needs an API key or base URL that is not configured.
 
 Fix:
 
 - Put a key in a private config as `[ai] api-key = "..."`.
-- Or leave `api-key` empty and set `OPENAI_API_KEY`.
+- Or leave `api-key` empty and set `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `REAI_AI_API_KEY`.
+- For `openai-compatible`, set `[ai] base-url = "http://host:port/v1"` unless using `lmstudio`, `ollama`, or `hermes`.
 - Never commit real keys.
 
 ## MCP Provider Unsupported
@@ -56,17 +57,24 @@ Symptom:
 Unsupported MCP provider
 ```
 
-Likely cause: config requested a provider other than `mock` or `disabled`.
+Likely cause: config requested a provider other than `reai`, `simulation`, or `disabled`.
 
-Fix: set:
+Fix: remove non-IDA/non-AI settings from `reai.toml`. REAI's own MCP engine is enabled by default.
 
-```toml
-[mcp]
-enabled = false
-provider = "disabled"
+## REAI MCP Backend Missing
+
+Symptom:
+
+```text
+Core MCP session could not be started.
 ```
 
-or use `mock` for deterministic development tests.
+Likely cause: Phase 4 MCP is enabled, but `reai-mcp` is not installed on `PATH` or cannot bind the configured host/port.
+
+Fix:
+
+- Reinstall REAI in editable mode with `python -m pip install -e .` so the `reai-mcp` console script is available.
+- Re-run the same command; REAI records MCP as unavailable and continues without simulated evidence when the local backend cannot start.
 
 ## Workspace Locked
 

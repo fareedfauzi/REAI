@@ -19,10 +19,13 @@ WORKSPACE_SUBDIRS = (
     "IDB Files",
     "REPORT",
     "Analysis Data",
+    "Analysis Findings",
     "Raw Data",
     "Extracted Codes",
     "REAI Logs",
 )
+
+LEGACY_EMPTY_WORKSPACE_SUBDIRS = ("analysis", "raw", "ida")
 
 
 class WorkspacePaths(BaseModel):
@@ -32,6 +35,7 @@ class WorkspacePaths(BaseModel):
     ida: Path
     report: Path
     analysis: Path
+    findings: Path
     raw: Path
     extracted_codes: Path
     pseudocode: Path
@@ -55,6 +59,7 @@ class WorkspacePaths(BaseModel):
             ida=root / "IDB Files",
             report=root / "REPORT",
             analysis=analysis,
+            findings=root / "Analysis Findings",
             raw=root / "Raw Data",
             extracted_codes=extracted_codes,
             pseudocode=extracted_codes / "pseudocode",
@@ -69,6 +74,20 @@ class WorkspacePaths(BaseModel):
             (self.root / subdir).mkdir(parents=True, exist_ok=True)
         self.pseudocode.mkdir(parents=True, exist_ok=True)
         self.disassembly.mkdir(parents=True, exist_ok=True)
+        self.cleanup_legacy_empty_directories()
+
+    def cleanup_legacy_empty_directories(self) -> list[Path]:
+        removed: list[Path] = []
+        for subdir in LEGACY_EMPTY_WORKSPACE_SUBDIRS:
+            path = self.root / subdir
+            if not path.is_dir() or path.is_symlink():
+                continue
+            try:
+                path.rmdir()
+            except OSError:
+                continue
+            removed.append(path)
+        return removed
 
 
 def sanitize_filename_stem(value: str, max_length: int = 80) -> str:

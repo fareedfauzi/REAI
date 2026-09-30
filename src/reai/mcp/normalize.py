@@ -37,7 +37,7 @@ def _observation_to_evidence(capability: MCPCapability, target: str, observation
     elif capability == MCPCapability.CALLEES:
         value = str(observation.get("callee") or observation)
         description = f"{target} calls or references {value}."
-    elif capability == MCPCapability.XREFS:
+    elif capability in {MCPCapability.XREFS, MCPCapability.XREF_TO, MCPCapability.XREF_FROM}:
         value = str(observation.get("source_address") or observation.get("destination_address") or observation)
         description = f"XREF evidence links {value} with {target}."
     elif capability == MCPCapability.DISASSEMBLE:
@@ -55,6 +55,19 @@ def _observation_to_evidence(capability: MCPCapability, target: str, observation
     elif capability == MCPCapability.TYPES:
         value = str(observation.get("declaration") or observation)
         description = f"Type information for {target} was retrieved."
+    elif capability in {
+        MCPCapability.METADATA,
+        MCPCapability.FUNCTIONS,
+        MCPCapability.STRINGS,
+        MCPCapability.IMPORTS,
+        MCPCapability.EXPORTS,
+        MCPCapability.GLOBALS,
+        MCPCapability.STRUCTURES,
+        MCPCapability.SEGMENTS,
+        MCPCapability.BASIC_BLOCKS,
+    }:
+        value = str(observation.get("text") or observation.get("value") or observation)
+        description = f"{capability.value} context was retrieved through MCP for {target}."
     else:
         value = str(observation.get("value") or observation.get("name") or observation)
         description = f"{capability.value} returned read-only evidence for {target}."
@@ -76,4 +89,3 @@ def _compact_raw(raw) -> str:
     except TypeError:
         text = str(raw)
     return text[:1000]
-

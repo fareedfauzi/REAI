@@ -17,7 +17,8 @@ Call graph and SCC ordering
   v
 Bottom-up function analysis
   |
-  +--> optional MCP investigation
+  v
+Targeted MCP investigation
   |
   v
 Context propagation and validation
@@ -46,15 +47,27 @@ Recursive groups are handled as strongly connected components. If `max_functions
 
 Supported providers:
 
-- `disabled`: skip AI phases.
-- `mock`: deterministic local provider for tests.
-- `openai`: structured responses through the OpenAI Python SDK.
+- `openai`: OpenAI API.
+- `anthropic`: Anthropic Claude API.
+- `openai-compatible`: custom OpenAI-format endpoint.
+- `lmstudio`, `ollama`, `hermes`: local OpenAI-format endpoints with sensible default URLs.
+- `mock` / `simulation`: deterministic providers for tests.
 
 ## Phase 4: MCP Investigation
 
-MCP is optional and disabled by default. The current repository includes only a deterministic `mock` provider.
+MCP is a core read-only investigation stage. Bulk extraction provides broad static context, while MCP lets REAI return to IDA for targeted evidence such as xrefs, callers/callees, decompilation, disassembly, control-flow, strings, imports, globals, static data, types, and structures.
 
-When enabled, REAI queues low-confidence or evidence-poor functions, executes allowed read-only tool capabilities, stores observed evidence, and records whether the interpretation improved. Budgets prevent runaway recursive investigation.
+The production provider is REAI's owned `reai-mcp` backend. REAI starts the backend, discovers the available tool catalog, normalizes server tools into internal read-only capabilities, binds the current sample workspace, and records session/capability metadata in SQLite. The first implementation serves REAI's Phase 2 extraction artifacts through an MCP-compatible HTTP interface; direct owned IDA/idalib queries can be added behind the same provider later.
+
+If the local MCP backend cannot start, REAI records `MCP_UNAVAILABLE` evidence gaps and continues without simulated evidence. The deterministic simulation provider exists only for tests and local development.
+
+REAI queues low-confidence, evidence-poor, ambiguous, or high-value functions, executes allowed read-only tool capabilities, stores observed evidence, and records whether the interpretation improved. Budgets and action fingerprints prevent runaway or duplicate investigation. IDB mutation remains confined to Phase 6.
+
+Investigation V2 separates confidence from analytical importance. A trivial helper can be high-confidence and low-importance, while an entry-point downloader can be high-confidence and still worth investigating because it answers report-critical questions. REAI scores practical signals such as entry-point relationship, call relationships, network/process/file APIs, persistence indicators, crypto/decoding context, artifacts, and unresolved unknowns. Runtime helpers are normally low importance.
+
+Before using MCP, REAI generates concrete investigation questions and stores them in SQLite. Examples include who calls a function, where an artifact is referenced, what endpoint a network function uses, where response data goes, how a file path is used, and what command or path is executed. The planner maps obvious questions deterministically to read-only capabilities such as callers, callees, xrefs, decompile, disassemble, strings, imports, data, types, and structures.
+
+Question state is persisted as `PENDING`, `INVESTIGATING`, `RESOLVED`, `PARTIALLY_RESOLVED`, `UNRESOLVED`, or `FAILED`. Unresolved or partially resolved questions feed the final report's Analytical Gaps section. This makes uncertainty visible instead of hiding it behind a confident function summary.
 
 ## Phase 5: Malware Understanding
 
@@ -68,7 +81,13 @@ The original IDB is preserved as `ida/original.i64`. REAI copies it to a tempora
 
 ## Phase 7: Report Generation
 
-Reports are rendered from validated structured facts. The report generator builds a model, creates deterministic narrative sections, validates references, and writes Markdown, HTML, and PDF outputs.
+Reports are rendered from validated structured facts. The report generator builds an evidence-backed `ReportModelV2`, creates deterministic narrative sections, validates references, and writes Markdown, HTML, and PDF outputs.
+
+The report engine separates the semantic execution flow from the raw call graph. It derives execution stages from validated functions, artifacts, imports, and execution-flow rows, and suppresses compiler/runtime helpers from the primary narrative. Function importance is scored separately from confidence so a high-confidence trivial helper does not outrank malware orchestration logic.
+
+IOC presentation is typed: network IOC, host IOC, build artifact, command-line artifact, and contextual artifact are distinct categories. PDB paths and similar build strings are treated as development context unless stronger evidence exists. ATT&CK mappings are emitted only when specific behavior has supporting functions, APIs, or artifacts.
+
+Analytical gaps are generated for unresolved contradictions, low-confidence important functions, and missing relationships such as network response handling. These gaps are intended to guide analyst follow-up rather than hide uncertainty.
 
 ## Phase 8: Batch and Resume
 

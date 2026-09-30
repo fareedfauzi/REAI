@@ -94,6 +94,9 @@ class KeyFunctionCard(BaseModel):
     artifacts: list[str] = Field(default_factory=list)
     related_functions: list[str] = Field(default_factory=list)
     pseudocode_snippet: str | None = None
+    original_decompiled_code: str | None = None
+    readable_code: str | None = None
+    execution_flow: str | None = None
     idb_status: str | None = None
 
 

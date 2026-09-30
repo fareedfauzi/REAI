@@ -1,62 +1,12 @@
-output_dir = "./reai-output"
-workers = 1
-recursive = false
-verbose = false
-
 [ida]
 path = "C:/Program Files/IDA Professional 9.3"
-timeout_seconds = 3600
-max_concurrent_instances = 1
-database_extension = ".i64"
 
 [ai]
-provider = "disabled"
+# openai, anthropic, openai-compatible, lmstudio, ollama, or hermes
+provider = "openai"
 model = "gpt-4o-mini"
-api-key = "sk-proj-<REDACTED>"
-max_concurrent_requests = 1
-max_retries = 2
-timeout_seconds = 120
+api-key = ""
 
-[mcp]
-enabled = true
-provider = "simulation"
-
-max_rounds_per_function = 5
-max_tool_calls_per_function = 20
-max_related_functions = 20
-max_depth = 4
-timeout_seconds = 60
-
-
-[analysis]
-enabled = true
-
-[analysis.propagation]
-max_passes = 3
-minimum_context_change = 1
-minimum_confidence_delta = 0.05
-
-[analysis.validation]
-rename_confidence_threshold = 0.65
-comment_confidence_threshold = 0.50
-variable_confidence_threshold = 0.65
-type_confidence_threshold = 0.85
-
-[enrichment]
-enabled = true
-mode = "auto"
-allow_manifest_fallback = true
-
-[report]
-enabled = true
-defang_iocs = true
-formats = ["markdown", "html", "pdf"]
-max_important_functions = 25
-max_evidence_items = 4
-
-[reliability]
-sample_retry_limit = 0
-worker_restart_limit = 0
-lock_stale_seconds = 3600
-retry_initial_delay_seconds = 1.0
-retry_max_delay_seconds = 8.0
+# Only needed for provider = "openai-compatible".
+# lmstudio, ollama, and hermes already have local defaults.
+# base-url = "http://localhost:1234/v1"

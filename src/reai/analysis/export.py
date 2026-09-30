@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from reai.analysis.schemas import ValidatedAnalysisModel
 from reai.extraction.serialization import write_json
+from reai.reporting.findings import write_semantic_findings
 from reai.utils.paths import WorkspacePaths
 
 
@@ -17,4 +18,4 @@ def export_validated_analysis(workspace: WorkspacePaths, model: ValidatedAnalysi
     write_json(workspace.analysis / "contradictions.json", {"contradictions": model.contradictions})
     write_json(workspace.analysis / "change_candidates.json", {"changes": model.change_candidates})
     write_json(workspace.analysis / "propagation.json", {"passes": model.propagation_passes})
-
+    write_semantic_findings(workspace, model)

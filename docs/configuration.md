@@ -1,126 +1,86 @@
 # Configuration
 
-REAI configuration precedence:
-
-```text
-built-in defaults -> auto-discovered / specified reai.toml -> CLI options
-```
-
-### Auto-Discovery Order
-
-If `--config` is not explicitly passed, REAI automatically looks for `reai.toml` in:
-
-1. `REAI_CONFIG` environment variable (if set)
-2. Current working directory (`./reai.toml` and parent directories)
-3. User home directory (`~/.reai/reai.toml` or `~/.config/reai/reai.toml` or `%APPDATA%/reai/reai.toml`)
-4. REAI repository/installation root
-
-You can still explicitly load a custom config file at any time with:
+REAI should be easy to run:
 
 ```bash
-reai malware.exe --config /path/to/custom.toml
+reai sample.exe
 ```
 
+Everything in the pipeline is enabled by default:
 
-## Top-Level Settings
+- REAI MCP investigation
+- function renaming
+- variable renaming
+- function comments
+- analyzed IDB saving
+- intelligence report generation
 
-| Key | Type | Default | Purpose |
-| --- | --- | --- | --- |
-| `output_dir` | path | `./reai-output` | Root for all sample workspaces. |
-| `workers` | integer | `1` | Recorded batch worker count. Process-level parallel execution is not implemented. |
-| `recursive` | boolean | `false` | Recursively discover samples for directory input. |
-| `verbose` | boolean | `false` | Enable more terminal/debug detail. |
+The user-facing config only needs IDA and AI settings.
 
-`[batch]` may also contain `workers` and `recursive` for compatibility with the config loader.
+## Minimal Config
 
-## IDA
+```toml
+[ida]
+path = "C:/Program Files/IDA Professional 9.3"
 
-| Key | Type | Default | Purpose |
-| --- | --- | --- | --- |
-| `path` | path/null | unset | IDA executable or installation directory. |
-| `timeout_seconds` | integer | `3600` | IDA subprocess timeout. |
-| `max_concurrent_instances` | integer | `1` | Reserved guard for IDA concurrency policy. |
-| `database_extension` | string | `.i64` | IDB extension used for `original` and `analyzed` files. |
+[ai]
+provider = "openai"
+model = "gpt-4o-mini"
+api-key = ""
+```
 
-## AI
+You can also write the same config as simple top-level keys:
 
-| Key | Type | Default | Purpose |
-| --- | --- | --- | --- |
-| `provider` | string | `disabled` | `disabled`, `mock`, or `openai`. |
-| `model` | string/null | unset | Required for OpenAI. |
-| `api-key` / `api_key` | string/null | unset | Optional OpenAI API key. |
-| `max_functions` | integer/null | unset | Development limit for function analysis count. |
-| `max_concurrent_requests` | integer | `1` | Reserved request concurrency setting. |
-| `max_retries` | integer | `2` | Retry count for AI requests. |
-| `timeout_seconds` | integer | `120` | AI request timeout setting. |
-| `prompt_version` | string | `phase3-function-analysis-v1` | Stored with AI results. |
-| `schema_version` | string | `phase3-function-analysis-v1` | Stored with AI results. |
-| `confidence_policy_version` | string | `phase3-confidence-v1` | Stored with AI results. |
-| `context_builder_version` | string | `phase3-context-v1` | Stored with AI results. |
+```toml
+ida_path = "C:/Program Files/IDA Professional 9.3"
+provider = "openai"
+model = "gpt-4o-mini"
+api_key = ""
+```
 
-## MCP
+If `api-key` / `api_key` is empty or omitted, REAI uses the provider's normal environment variable, such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
 
-| Key | Type | Default | Purpose |
-| --- | --- | --- | --- |
-| `enabled` | boolean | `false` | Enable Phase 4 investigation. |
-| `provider` | string | `disabled` | `disabled` or `simulation` in this repository. |
-| `max_functions` | integer/null | unset | Limit investigation candidates. |
-| `max_rounds_per_function` | integer | `5` | Bound iterative investigation. |
-| `max_tool_calls_per_function` | integer | `20` | Bound tool calls per function. |
-| `max_total_tool_calls` | integer/null | unset | Optional global tool-call budget. |
-| `max_related_functions` | integer | `20` | Bound relationship expansion. |
-| `max_depth` | integer | `4` | Bound recursive planning depth. |
-| `timeout_seconds` | integer | `60` | MCP operation timeout setting. |
-| `allowlist` | list[string] | read-only IDA capabilities | Restricts tool capabilities. |
+## AI Providers
 
-No live external MCP network daemon is included yet. `simulation` provides deterministic offline investigation modeling for tests and automated evaluation.
+| Provider | Notes |
+| --- | --- |
+| `openai` | Uses the OpenAI API. |
+| `anthropic` | Uses the Anthropic Claude API. |
+| `openai-compatible` | Any OpenAI-format endpoint; set `base-url`. |
+| `lmstudio` | OpenAI-format local endpoint, defaults to `http://localhost:1234/v1`. |
+| `ollama` | OpenAI-format local endpoint, defaults to `http://localhost:11434/v1`. |
+| `hermes` | OpenAI-format local endpoint, defaults to `http://localhost:8080/v1`. |
 
+For custom OpenAI-format servers:
 
-## Analysis
+```toml
+[ida]
+path = "C:/Program Files/IDA Professional 9.3"
 
-| Key | Type | Default | Purpose |
-| --- | --- | --- | --- |
-| `enabled` | boolean | `true` | Enable Phase 5 semantic validation. |
-| `taxonomy_version` | string | `phase5-subsystem-taxonomy-v1` | Stored with semantic output. |
-| `schema_version` | string | `phase5-validated-analysis-v1` | Stored with semantic output. |
-| `analysis.propagation.max_passes` | integer | `3` | Multi-pass context propagation cap. |
-| `analysis.propagation.minimum_context_change` | integer | `1` | Minimum useful context change. |
-| `analysis.propagation.minimum_confidence_delta` | float | `0.05` | Minimum confidence improvement. |
-| `analysis.validation.rename_confidence_threshold` | float | `0.85` | Minimum function rename confidence. |
-| `analysis.validation.comment_confidence_threshold` | float | `0.55` | Minimum comment confidence. |
-| `analysis.validation.variable_confidence_threshold` | float | `0.85` | Minimum variable rename confidence. |
-| `analysis.validation.type_confidence_threshold` | float | `0.90` | Minimum type/structure confidence. |
+[ai]
+provider = "openai-compatible"
+model = "my-local-model"
+base-url = "http://localhost:1234/v1"
+api-key = "not-needed"
+```
 
-## Enrichment
+## Discovery
 
-| Key | Type | Default | Purpose |
-| --- | --- | --- | --- |
-| `enabled` | boolean | `true` | Enable Phase 6 IDB enrichment. |
-| `mode` | string | `auto` | `auto`, `ida`, or `manifest`. |
-| `schema_version` | string | `phase6-idb-enrichment-v1` | Stored with enrichment runs. |
-| `comment_marker_begin` | string | `[REAI ANALYSIS BEGIN]` | Managed comment block start marker. |
-| `comment_marker_end` | string | `[REAI ANALYSIS END]` | Managed comment block end marker. |
-| `allow_manifest_fallback` | boolean | `true` | Allow sidecar manifest fallback when IDA enrichment is unavailable. |
+If `--config` is not passed, REAI looks for `reai.toml` in:
 
-## Report
+1. `REAI_CONFIG`
+2. Current directory and parents
+3. `~/.reai/reai.toml`, `~/.config/reai/reai.toml`, or `%APPDATA%/reai/reai.toml`
+4. The repository root during editable development
 
-| Key | Type | Default | Purpose |
-| --- | --- | --- | --- |
-| `enabled` | boolean | `true` | Enable Phase 7 report generation. |
-| `schema_version` | string | `phase7-report-v1` | Stored with report runs. |
-| `prompt_version` | string | `phase7-deterministic-narrative-v1` | Narrative strategy identifier. |
-| `defang_iocs` | boolean | `true` | Defang rendered IOCs. |
-| `formats` | list[string] | `["markdown", "html", "pdf"]` | Report formats. |
-| `max_important_functions` | integer | `25` | Limit important function table. |
-| `max_evidence_items` | integer | `4` | Limit rendered evidence per item. |
-| `attack_version` | string | `reai-built-in-phase7-v1` | ATT&CK mapping source label. |
+Environment overrides:
 
-## Reliability
+```text
+REAI_IDA_PATH
+REAI_AI_PROVIDER
+REAI_AI_MODEL
+REAI_AI_API_KEY
+REAI_AI_BASE_URL
+```
 
-| Key | Type | Default | Purpose |
-| --- | --- | --- | --- |
-| `sample_retry_limit` | integer | `0` | Per-sample retry attempts after first failure. |
-| `worker_restart_limit` | integer | `0` | Reserved for future worker supervision. |
-| `lock_stale_seconds` | integer | `3600` | Workspace lock stale threshold. |
-| `retry_initial_delay_seconds` | float | `1.0` | Retry backoff start. |
-| `retry_max_delay_seconds` | float | `8.0` | Retry backoff cap. |
+Advanced internal defaults exist for development, but normal users should not need them.

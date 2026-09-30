@@ -24,6 +24,21 @@ def sanitize_ida_name(value: str) -> str | None:
     return name[:96]
 
 
+def unique_ida_name(base: str, used: set[str], *, max_length: int = 96) -> str:
+    name = base[:max_length]
+    if name not in used:
+        used.add(name)
+        return name
+    suffix = 2
+    while True:
+        tail = f"_{suffix}"
+        candidate = f"{base[: max_length - len(tail)]}{tail}"
+        if candidate not in used:
+            used.add(candidate)
+            return candidate
+        suffix += 1
+
+
 def assign_unique_names(changes: list[EnrichmentChange]) -> None:
     # Sort by address to make suffix assignment (name_2, name_3, etc.) fully
     # deterministic regardless of DB query order. Without this, which function
@@ -32,7 +47,7 @@ def assign_unique_names(changes: list[EnrichmentChange]) -> None:
         changes,
         key=lambda c: (c.address or "", c.entity),
     )
-    used: dict[str, int] = {}
+    used: set[str] = set()
     for change in sorted_changes:
         if change.entity != "function" or change.operation != "rename" or change.status != ChangeStatus.PENDING:
             continue
@@ -41,9 +56,7 @@ def assign_unique_names(changes: list[EnrichmentChange]) -> None:
             change.status = ChangeStatus.SKIPPED_CONFLICT
             change.reason = "Proposed name cannot be converted to a valid IDA identifier."
             continue
-        count = used.get(sanitized, 0) + 1
-        used[sanitized] = count
-        change.applied = sanitized if count == 1 else f"{sanitized}_{count}"
+        change.applied = unique_ida_name(sanitized, used)
 
 
 

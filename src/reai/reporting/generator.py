@@ -10,6 +10,7 @@ from reai.core.config import ReportConfig
 from reai.core.exceptions import ReportError
 from reai.core.sample import Sample
 from reai.extraction.serialization import atomic_write_text
+from reai.reporting.findings import write_report_findings
 from reai.reporting.models_v2 import ReportModelV2
 from reai.reporting.render_v2 import render_html_v2, render_markdown_v2, render_pdf_v2
 from reai.reporting.schemas import ReportRun, ReportRunStatus, ReportSection, ReportSectionStatus, ReportStats
@@ -32,6 +33,7 @@ class ReportGenerator:
             return None
         self.workspace.report.mkdir(parents=True, exist_ok=True)
         model = synthesize_report_model(self.config, self.repository, self.workspace, sample.sample_id)
+        write_report_findings(self.workspace, model)
         sections = _build_legacy_sections(model)
         model_failures = validate_report_model(model)
 

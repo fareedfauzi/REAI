@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from reai.extraction.serialization import write_json
 from reai.mcp.schemas import MCPInvestigationStats
+from reai.reporting.findings import write_mcp_findings
 from reai.storage.repository import AnalysisRepository
 from reai.utils.paths import WorkspacePaths
 
@@ -27,4 +28,4 @@ def export_mcp_artifacts(
         workspace.analysis / "mcp_usage.json",
         {"calls": repository.get_mcp_call_rows(sample_id), "stats": stats},
     )
-
+    write_mcp_findings(workspace, repository, sample_id, stats)

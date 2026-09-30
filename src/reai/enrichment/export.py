@@ -4,6 +4,7 @@ import json
 
 from reai.enrichment.schemas import EnrichmentRun, EnrichmentStats
 from reai.extraction.serialization import atomic_write_text
+from reai.reporting.findings import write_enrichment_findings
 from reai.storage.repository import AnalysisRepository
 from reai.utils.paths import WorkspacePaths
 
@@ -25,3 +26,4 @@ def export_changes(
     }
     path = workspace.analysis / "changes.json"
     atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    write_enrichment_findings(workspace, repository, sample_id, run.run_id, stats)

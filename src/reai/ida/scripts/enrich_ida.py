@@ -86,6 +86,7 @@ def _apply_function_rename(change: dict) -> None:
     if not _is_placeholder_name(current):
         _skip(change, "SKIPPED_CONFLICT", f"Existing name {current!r} is meaningful and will not be overwritten.")
         return
+    proposed = _unique_ida_name(proposed, ea)
     if not ida_name.set_name(ea, proposed, ida_name.SN_CHECK):
         _skip(change, "FAILED", "IDA rejected the proposed function name.")
         return
@@ -143,21 +144,36 @@ def _apply_variable_rename(change: dict) -> None:
         _skip(change, "SKIPPED_CONFLICT", "Variable name invalid or missing.")
         return
 
-    # Check if already renamed in Hex-Rays
+    if orig_id == proposed:
+        change["applied"] = proposed
+        change["status"] = "APPLIED"
+        change["reason"] = "Variable already has the proposed name."
+        change["timestamp"] = _now()
+        return
+
+    lvar_names = set()
     try:
         import ida_hexrays
         if ida_hexrays.init_hexrays_plugin():
             cfunc = ida_hexrays.decompile(ea)
             if cfunc:
                 for lvar in cfunc.get_lvars():
-                    if lvar.name == proposed:
-                        change["applied"] = proposed
-                        change["status"] = "APPLIED"
-                        change["reason"] = "Variable already has the proposed name."
-                        change["timestamp"] = _now()
-                        return
+                    if lvar.name:
+                        lvar_names.add(str(lvar.name))
     except Exception:
         pass
+    is_global_name = bool(re.match(r"^(?:dword|unk|qword|byte|word)_([0-9a-fA-F]+)$", orig_id or ""))
+    if lvar_names and orig_id not in lvar_names and not is_global_name:
+        if proposed in lvar_names:
+            change["applied"] = proposed
+            change["status"] = "APPLIED"
+            change["reason"] = "Variable already has the proposed name."
+            change["timestamp"] = _now()
+            return
+        _skip(change, "SKIPPED_STATE_MISMATCH", f"Hex-Rays local variable {orig_id!r} was not found.")
+        return
+    if lvar_names and not is_global_name:
+        proposed = _unique_local_name(proposed, lvar_names - {orig_id})
 
     renamed = False
     # Attempt 1: Hex-Rays local variable rename
@@ -292,6 +308,30 @@ def _sanitize_name(value: str) -> str | None:
     return name[:96]
 
 
+def _unique_ida_name(base: str, ea: int) -> str:
+    if idc.get_name_ea_simple(base) in (idc.BADADDR, ea):
+        return base
+    suffix = 2
+    while True:
+        tail = f"_{suffix}"
+        candidate = f"{base[: 96 - len(tail)]}{tail}"
+        if idc.get_name_ea_simple(candidate) in (idc.BADADDR, ea):
+            return candidate
+        suffix += 1
+
+
+def _unique_local_name(base: str, used: set[str]) -> str:
+    if base not in used:
+        return base
+    suffix = 2
+    while True:
+        tail = f"_{suffix}"
+        candidate = f"{base[: 96 - len(tail)]}{tail}"
+        if candidate not in used:
+            return candidate
+        suffix += 1
+
+
 def _merge_comment(existing: str, managed: str, begin: str, end: str) -> str:
     pattern = re.compile(rf"\n?{re.escape(begin)}.*?{re.escape(end)}\n?", re.DOTALL)
     cleaned = pattern.sub("\n", existing).strip()
@@ -316,4 +356,3 @@ if __name__ == "__main__":
             idc.qexit(1)
         except Exception:
             sys.exit(1)
-

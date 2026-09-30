@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from reai.reporting.schemas import ReportModel
 
 
@@ -24,19 +26,19 @@ def validate_report_model(model: Any) -> list[str]:
 
 def validate_markdown(markdown: str, model: Any) -> list[str]:
     failures: list[str] = []
-    has_exec = "## Executive Summary" in markdown or "## Executive Assessment" in markdown
+    has_exec = "# Executive Summary" in markdown or "## Executive Summary" in markdown or "## Executive Assessment" in markdown
     if not has_exec:
         failures.append("Markdown is missing required section: Executive Assessment")
 
-    has_sample = "## Sample Information" in markdown or "## 2. Sample Profile" in markdown or "## Sample Profile" in markdown
+    has_sample = "# Sample Profile" in markdown or "## Sample Information" in markdown or "## 2. Sample Profile" in markdown or "## Sample Profile" in markdown
     if not has_sample:
         failures.append("Markdown is missing required section: Sample Profile")
 
-    has_funcs = "## Important Functions" in markdown or "## 5. Reverse Engineering Findings" in markdown or "## Reverse Engineering" in markdown
+    has_funcs = "# Technical Analysis" in markdown or "## Important Functions" in markdown or "## 5. Reverse Engineering Findings" in markdown or "## Reverse Engineering" in markdown
     if not has_funcs:
         failures.append("Markdown is missing required section: Reverse Engineering")
 
-    has_appendix = "## Appendix" in markdown or "## 11. Technical Appendix" in markdown or "## Technical Appendix" in markdown
+    has_appendix = "# Technical Analysis" in markdown or "## Appendix" in markdown or "## 11. Technical Appendix" in markdown or "## Technical Appendix" in markdown
     if not has_appendix:
         failures.append("Markdown is missing required section: Appendix")
 

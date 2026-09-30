@@ -6,26 +6,24 @@ import re
 from typing import Any
 
 from reai.core.config import ReportConfig
-from reai.reporting.loader import defang_indicator
 from reai.reporting.models_v2 import (
     AnalyticalGap,
     AppendixModel,
+    APISequence,
     AttackMappingDetail,
     ExecutionChainStage,
     HuntingLead,
-    ImportanceLevel,
     IOCItem,
     IOCType,
     KeyFinding,
     KeyFunctionCard,
+    RecoveredStructure,
     ReportModelV2,
     ReportStatsV2,
     SampleProfile,
     TechnicalBehaviorSection,
     ThreatIntelligenceModel,
     YaraRuleModel,
-    APISequence,
-    RecoveredStructure,
 )
 from reai.storage.database import connect_database
 from reai.storage.repository import AnalysisRepository
@@ -33,77 +31,40 @@ from reai.utils.paths import WorkspacePaths
 
 
 CRT_RUNTIME_NAMES = {
-    "scrt_fastfail",
-    "scrt_is_managed_app",
-    "scrt_unhandled_exception_filter",
-    "scrt_is_ucrt_dll_in_use",
-    "except_handler4",
-    "except_handler4_common",
-    "seh_filter_exe",
-    "seh_prolog4",
-    "isa_available_init",
-    "configure_narrow_argv",
-    "initialize_narrow_environment",
-    "get_initial_narrow_environment",
+    "scrt",
+    "except_handler",
+    "seh_",
     "initterm",
-    "initterm_e",
-    "exit",
-    "c_exit",
-    "cexit",
+    "security_cookie",
+    "guard_check",
+    "register_onexit",
+    "initialize_stdio",
     "set_app_type",
-    "setusermatherr",
-    "set_fmode",
-    "set_new_mode",
-    "p_argc",
-    "p_argv",
-    "p_commode",
-    "initialize_onexit_table",
-    "register_onexit_function",
-    "crt_atexit",
-    "controlfp_s",
-    "terminate",
-    "current_exception",
-    "current_exception_context",
     "memset",
+    "memcpy",
     "alldiv",
-    "alldvrm",
     "allmul",
-    "ftoui3",
-    "ltod3",
-    "isprocessorfeaturepresent",
-    "filter_x86_sse2_floating_point_exception_default",
-    "register_thread_local_exe_atexit_callback",
-    "configthreadlocale",
-    "initialize_stdio_options",
-    "set_exception_filter",
-    "set_exception_filter_2",
 }
 
-STUB_NAMES = {
-    "return_one",
-    "return_one_2",
-    "return_zero",
-    "noop_function",
-    "recursive_noop_function",
-    "recursive_noop_function_2",
-    "nullsub_1",
-    "nullsub",
-}
+STUB_NAMES = {"return_one", "return_zero", "noop_function", "nullsub", "recursive_noop_function"}
+
+NETWORK_APIS = ("internet", "winhttp", "urldownload", "socket", "connect", "recv", "send", "dns")
+PROCESS_APIS = ("createprocess", "shellexecute", "winexec", "createthread", "loadlibrary")
+FILE_APIS = ("createfile", "writefile", "readfile", "deletefile", "copyfile", "movefile")
+TIMING_APIS = ("sleep", "gettickcount", "queryperformance", "perf_counter", "perf_frequency")
+PERSISTENCE_TERMS = ("run key", "startup", "service", "schtasks", "persistence", "autorun")
 
 
 def defang_indicator(value: str, kind: str) -> str:
     if not value:
         return value
     if kind in {"url", "domain"}:
-        res = value.replace("http://", "hxxp://").replace("https://", "hxxps://")
-        return re.sub(r"\.(?=[a-zA-Z0-9_-])", "[.]", res)
+        defanged = value.replace("http://", "hxxp://").replace("https://", "hxxps://")
+        return re.sub(r"\.(?=[A-Za-z0-9_-])", "[.]", defanged)
     if kind == "ip":
         return re.sub(r"\.(?=[0-9])", "[.]", value)
-    if kind == "file_path":
-        return re.sub(r"\.([a-zA-Z0-9]+)$", r"[.]\1", value)
-    if kind == "command_line":
-        val = value.replace("1.1.1.1", "1[.]1[.]1[.]1")
-        return val.replace(".exe", "[.]exe")
+    if kind in {"file_path", "command_line"}:
+        return value.replace(".exe", "[.]exe").replace(".dll", "[.]dll")
     return value
 
 
@@ -113,94 +74,59 @@ def synthesize_report_model(
     workspace: WorkspacePaths,
     sample_id: str,
 ) -> ReportModelV2:
-    with connect_database(repository.database_path) as conn:
-        one = lambda q: conn.execute(q, (sample_id,)).fetchone()
-        many = lambda q: [dict(r) for r in conn.execute(q, (sample_id,)).fetchall()]
+    rows = _load_report_rows(repository, sample_id)
+    sample_row = rows["sample"]
+    if not sample_row:
+        raise KeyError(f"Sample not found: {sample_id}")
 
-        sample_row = dict(one("SELECT * FROM samples WHERE sample_id = ?") or {})
-        if not sample_row:
-            raise KeyError(f"Sample not found: {sample_id}")
-        meta_row = dict(one("SELECT * FROM binary_metadata WHERE sample_id = ?") or {})
-        if meta_row.get("metadata_json"):
-            try:
-                meta_row.update(json.loads(meta_row["metadata_json"]))
-            except Exception:
-                pass
-        func_rows = many("SELECT function_address AS address, original_name, proposed_name, summary, confidence, confidence_label, finding_json FROM validated_function_findings WHERE sample_id = ? ORDER BY function_address")
-        artifact_rows = many("SELECT * FROM validated_artifacts WHERE sample_id = ? ORDER BY address")
-        flow_rows = many("SELECT * FROM execution_flows WHERE sample_id = ?")
-        structure_rows = many("SELECT * FROM recovered_structures WHERE sample_id = ?")
-        contradiction_rows = many("SELECT * FROM contradictions WHERE sample_id = ?")
+    report_artifacts = [artifact for artifact in rows["artifacts"] if _is_reportable_artifact(artifact)]
 
-    # Applied IDB names
-    applied_names: dict[str, tuple[str, str]] = {}
-    for row in repository.get_idb_change_rows(sample_id):
-        if row["operation"] == "rename":
-            applied_names[row["address"]] = (row["applied"] or row["proposed"], row["status"])
+    profile = _build_sample_profile(sample_row, rows["metadata"], rows["functions"], report_artifacts)
+    key_functions, runtime_helpers = _score_and_categorize_functions(
+        rows["functions"],
+        rows["applied_names"],
+        rows["import_usage"],
+        report_artifacts,
+        rows["flow_rows"],
+        config.max_important_functions,
+        workspace,
+    )
+    indicators = _build_indicators(report_artifacts, config.defang_iocs)
+    execution_chain = _build_semantic_execution_chain(key_functions, report_artifacts, rows["flow_rows"])
+    technical_analysis = _build_technical_analysis(key_functions, indicators, rows["configuration_items"], execution_chain)
+    executive_assessment = _build_executive_assessment(profile, key_functions, indicators, execution_chain)
+    key_findings = _build_key_findings(key_functions, indicators, execution_chain)
+    api_sequences = _build_api_sequences(execution_chain)
+    structures = _build_structures(rows["structure_rows"])
+    threat_intel = _build_threat_intel(indicators, profile)
+    attack_mappings = _build_attack_mappings(key_functions, indicators, execution_chain)
+    hunting_leads = _build_hunting_leads(indicators, execution_chain)
+    yara_rule = _build_yara_rule(profile, indicators)
+    analytical_gaps = _build_analytical_gaps(key_functions, indicators, rows["contradiction_rows"], rows["question_rows"], execution_chain)
+    appendix = _build_appendix(
+        runtime_helpers,
+        rows["functions"],
+        rows["applied_names"],
+        repository.get_validated_analysis_fingerprint(sample_id),
+        rows["enrichment_fingerprint"],
+    )
 
-    import_usage = repository.get_import_usage_by_function(sample_id)
-    source_fingerprint = repository.get_validated_analysis_fingerprint(sample_id)
-    latest_enrichment = repository.get_latest_enrichment_run(sample_id)
-    enrichment_fingerprint = latest_enrichment.get("enrichment_fingerprint") if latest_enrichment else None
-
-    # 1. Sample Profile & Badges
-    profile = _build_sample_profile(sample_row, meta_row, func_rows, artifact_rows)
-
-    # 2. Key Functions & Importance Scoring
-    key_functions, runtime_helpers = _score_and_categorize_functions(func_rows, applied_names, import_usage, artifact_rows)
-
-    # 3. Indicators & Classification
-    indicators = _build_indicators(artifact_rows, config.defang_iocs)
-
-    # 4. Semantic Execution Chain (No self edges!)
-    execution_chain = _build_semantic_execution_chain(func_rows, artifact_rows, key_functions)
-
-    # 5. Technical Analysis (Narrative-first)
-    technical_analysis = _build_technical_analysis(func_rows, artifact_rows, key_functions, indicators)
-
-    # 6. Executive Assessment
-    executive_assessment = _build_executive_assessment(profile, key_functions, indicators)
-
-    # 7. Key Findings
-    key_findings = _build_key_findings(profile, key_functions, indicators, execution_chain)
-
-    # 8. Reverse Engineering Details (API sequences, structures)
-    api_sequences = _build_api_sequences(key_functions)
-    structures = _build_structures(structure_rows)
-
-    # 9. Threat Intelligence Model
-    threat_intel = _build_threat_intel(artifact_rows, indicators, profile)
-
-    # 10. MITRE ATT&CK Mapping
-    attack_mappings = _build_attack_mappings(key_functions, artifact_rows, indicators)
-
-    # 11. Detection & Hunting (Hunting leads & YARA)
-    hunting_leads = _build_hunting_leads(profile, indicators, execution_chain)
-    yara_rule = _build_yara_rule(profile, indicators, artifact_rows)
-
-    # 12. Analytical Gaps
-    analytical_gaps = _build_analytical_gaps(key_functions, artifact_rows, contradiction_rows)
-
-    # 13. Appendix
-    appendix = _build_appendix(workspace, runtime_helpers, func_rows, applied_names, source_fingerprint, enrichment_fingerprint)
-
-    # Calculate fingerprint
     fingerprint_data = {
         "sample": profile.model_dump(),
-        "findings": [f.model_dump() for f in key_findings],
-        "chain": [s.model_dump() for s in execution_chain],
-        "iocs": [i.model_dump() for i in indicators],
-        "attack": [a.model_dump() for a in attack_mappings],
+        "findings": [finding.model_dump() for finding in key_findings],
+        "chain": [stage.model_dump() for stage in execution_chain],
+        "iocs": [indicator.model_dump() for indicator in indicators],
+        "attack": [mapping.model_dump() for mapping in attack_mappings],
         "schema": "report-engine-v2",
     }
     report_fingerprint = hashlib.sha256(json.dumps(fingerprint_data, sort_keys=True).encode("utf-8")).hexdigest()
     appendix.report_fingerprint = report_fingerprint
 
     stats = ReportStatsV2(
-        sections_generated=11,
-        sections_omitted=0,
-        tables_generated=6,
-        diagrams_generated=1,
+        sections_generated=8 + bool(attack_mappings) + bool(hunting_leads) + bool(analytical_gaps),
+        sections_omitted=max(0, 11 - (8 + bool(attack_mappings) + bool(hunting_leads) + bool(analytical_gaps))),
+        tables_generated=4 + bool(attack_mappings) + bool(indicators),
+        diagrams_generated=1 if execution_chain else 0,
         iocs_rendered=len(indicators),
         functions_referenced=len(key_functions),
         evidence_references=sum(len(f.artifacts) + len(f.key_apis) for f in key_functions),
@@ -208,8 +134,8 @@ def synthesize_report_model(
 
     return ReportModelV2(
         fingerprint=report_fingerprint,
-        source_analysis_fingerprint=source_fingerprint,
-        enrichment_fingerprint=enrichment_fingerprint,
+        source_analysis_fingerprint=repository.get_validated_analysis_fingerprint(sample_id),
+        enrichment_fingerprint=rows["enrichment_fingerprint"],
         sample=profile,
         executive_assessment=executive_assessment,
         key_findings=key_findings,
@@ -229,825 +155,1144 @@ def synthesize_report_model(
     )
 
 
-def _build_sample_profile(sample_row: dict, meta_row: dict, func_rows: list[dict], artifact_rows: list[dict]) -> SampleProfile:
-    filename = sample_row.get("filename", "unknown.bin")
-    sha256 = sample_row.get("sha256", "")
-    sha1 = sample_row.get("sha1", "")
-    md5 = sample_row.get("md5", "")
-    size = int(sample_row.get("size") or 0)
-    file_type = meta_row.get("file_type") or "Portable executable for 80386 (PE)"
-    bitness = int(meta_row.get("bitness") or 32)
-    arch = "x86" if bitness == 32 else "x64"
-    image_base = hex(meta_row.get("image_base") or 0x400000)
-    timestamp = sample_row.get("created_at") or "2026-09-30T00:00:00Z"
+def _load_report_rows(repository: AnalysisRepository, sample_id: str) -> dict[str, Any]:
+    with connect_database(repository.database_path) as conn:
+        sample = dict(conn.execute("SELECT * FROM samples WHERE sample_id = ?", (sample_id,)).fetchone() or {})
+        metadata = dict(conn.execute("SELECT * FROM binary_metadata WHERE sample_id = ?", (sample_id,)).fetchone() or {})
+        if metadata.get("metadata_json"):
+            try:
+                metadata.update(json.loads(metadata["metadata_json"]))
+            except ValueError:
+                pass
+        functions = [
+            _normalize_function_row(dict(row))
+            for row in conn.execute(
+                """
+                SELECT function_address AS address, original_name, proposed_name, summary,
+                       confidence, confidence_label, analysis_pass, finding_json
+                FROM validated_function_findings
+                WHERE sample_id = ?
+                ORDER BY function_address
+                """,
+                (sample_id,),
+            )
+        ]
+        artifacts = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM validated_artifacts WHERE sample_id = ? ORDER BY confidence DESC, address",
+                (sample_id,),
+            )
+        ]
+        flow_rows = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM execution_flows WHERE sample_id = ? ORDER BY confidence DESC, flow_id",
+                (sample_id,),
+            )
+        ]
+        structure_rows = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM recovered_structures WHERE sample_id = ? ORDER BY confidence DESC, name",
+                (sample_id,),
+            )
+        ]
+        contradiction_rows = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM contradictions WHERE sample_id = ? ORDER BY severity, contradiction_id",
+                (sample_id,),
+            )
+        ]
+        question_rows = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT * FROM mcp_questions
+                WHERE sample_id = ? AND status IN ('UNRESOLVED', 'FAILED')
+                ORDER BY priority, created_at, question_id
+                """,
+                (sample_id,),
+            )
+        ]
+        configuration_items = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM configuration_items WHERE sample_id = ? ORDER BY confidence DESC, key",
+                (sample_id,),
+            )
+        ]
 
-    # Identify role & protocol from artifacts
-    has_urls = any(a.get("artifact_type") == "url" for a in artifact_rows)
-    has_staging = any(a.get("artifact_type") == "file_path" or a.get("role") == "dropped_payload" for a in artifact_rows)
-    has_sleep = any("sleep" in f.get("proposed_name", "").lower() or "delay" in f.get("summary", "").lower() for f in func_rows)
+    applied_names: dict[str, tuple[str, str]] = {}
+    for row in repository.get_idb_change_rows(sample_id):
+        if row["entity"] == "function" and row["operation"] == "rename":
+            applied_names[row["address"]] = (row["applied"] or row["proposed"], row["status"])
+    latest_enrichment = repository.get_latest_enrichment_run(sample_id)
+    return {
+        "sample": sample,
+        "metadata": metadata,
+        "functions": functions,
+        "artifacts": artifacts,
+        "flow_rows": flow_rows,
+        "structure_rows": structure_rows,
+        "contradiction_rows": contradiction_rows,
+        "question_rows": question_rows,
+        "configuration_items": configuration_items,
+        "applied_names": applied_names,
+        "import_usage": repository.get_import_usage_by_function(sample_id),
+        "enrichment_fingerprint": latest_enrichment.get("enrichment_fingerprint") if latest_enrichment else None,
+    }
 
-    badges = ["WINDOWS", f"PE{bitness}"]
-    if has_urls and has_staging:
-        badges.extend(["DOWNLOADER", "HTTP", "STAGER"])
-        role = "Trojan Downloader / Stager"
-    elif has_urls:
-        badges.extend(["C2", "HTTP", "NETWORK_CLIENT"])
-        role = "Command and Control / Network Stager"
+
+def _normalize_function_row(row: dict[str, Any]) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    if row.get("finding_json"):
+        try:
+            payload = json.loads(row["finding_json"])
+        except ValueError:
+            payload = {}
+    for key in ("capabilities", "behavior", "evidence", "unknowns", "artifacts", "variables"):
+        row[key] = payload.get(key) or []
+    return row
+
+
+def _load_function_pseudocode(workspace: WorkspacePaths, address: str) -> str:
+    normalized = _address_token(address)
+    if not workspace.pseudocode.exists():
+        return ""
+    matches = sorted(workspace.pseudocode.glob(f"{normalized}_*.c"))
+    if not matches:
+        short = normalized.lstrip("0") or "0"
+        matches = sorted(workspace.pseudocode.glob(f"*{short}_*.c"))
+    if not matches:
+        return ""
+    try:
+        return matches[0].read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _address_token(address: str) -> str:
+    try:
+        return f"{int(str(address), 16):016x}"
+    except ValueError:
+        return re.sub(r"[^0-9a-fA-F]", "", str(address)).lower().rjust(16, "0")
+
+
+def _normalize_code_for_report(code: str) -> str:
+    if not code:
+        return ""
+    replacements = {
+        "â”Š": "  ",
+        "â”‚": "|",
+        "â”œ": "|",
+        "â””": "`",
+        "â”€": "-",
+        "┊": "  ",
+        "\u250a": "  ",
+    }
+    cleaned = code.replace("\r\n", "\n").replace("\r", "\n")
+    for old, new in replacements.items():
+        cleaned = cleaned.replace(old, new)
+    cleaned = "\n".join(line.rstrip() for line in cleaned.splitlines())
+    return cleaned.strip()
+
+
+def _build_readable_code(
+    original_code: str,
+    original_name: str,
+    display_name: str,
+    variables: list[dict[str, Any]],
+    applied_names: dict[str, tuple[str, str]],
+) -> str:
+    if not original_code:
+        return ""
+    readable = original_code
+    name_pairs = [(original_name, display_name), (_ida_short_name(original_name), display_name)]
+    if original_name == "_main":
+        name_pairs.append(("main", display_name))
+    for address, (applied, _status) in applied_names.items():
+        if not applied:
+            continue
+        try:
+            suffix = f"{int(address, 16):X}"
+        except ValueError:
+            continue
+        name_pairs.append((f"sub_{suffix}", applied))
+    for old, new in name_pairs:
+        if old and new and old != new:
+            readable = re.sub(rf"\b{re.escape(old)}\b", new, readable)
+    for item in variables:
+        old = str(item.get("original") or "").strip()
+        new = str(item.get("proposed") or "").strip()
+        if not old or not new or old == new:
+            continue
+        readable = re.sub(rf"\b{re.escape(old)}\b", new, readable)
+    header = "// Readable reconstruction generated from validated REAI function analysis.\n"
+    return header + readable
+
+
+def _ida_short_name(name: str) -> str:
+    if not name:
+        return ""
+    if name.startswith("sub_"):
+        return name
+    return name.split("@", 1)[0]
+
+
+def _build_function_execution_flow(
+    row: dict[str, Any],
+    display_name: str,
+    apis: list[str],
+    artifacts: list[str],
+    original_code: str,
+) -> str:
+    steps: list[str] = [f"Start {display_name}"]
+    behaviors = [str(item).rstrip(".") for item in row.get("behavior", []) if str(item).strip()]
+    for behavior in behaviors[:8]:
+        steps.append(behavior)
+    if not behaviors:
+        summary = str(row.get("summary") or "").rstrip(".")
+        if summary:
+            steps.append(summary)
+    lower_code = original_code.lower()
+    if "if (" in lower_code or "\n  if" in lower_code:
+        steps.append("Evaluate branch conditions visible in the decompiled code")
+    for artifact in artifacts[:4]:
+        steps.append(f"Reference artifact: {artifact}")
+    if "return 1" in lower_code:
+        steps.append("Return success status")
+    elif "return 0" in lower_code:
+        steps.append("Return failure or no-op status")
     else:
-        badges.extend(["STANDALONE_BINARY"])
-        role = "Malicious Portable Executable"
+        steps.append("End function")
+
+    lines: list[str] = []
+    for index, step in enumerate(dict.fromkeys(steps)):
+        prefix = "|-- " if index < len(steps) - 1 else "`-- "
+        lines.append(prefix + step)
+    return "\n".join(lines)
+
+
+def _code_excerpt(code: str, max_lines: int) -> str:
+    lines = code.splitlines()
+    if len(lines) <= max_lines:
+        return code
+    omitted = len(lines) - max_lines
+    return "\n".join(lines[:max_lines]) + f"\n/* ... {omitted} line(s) omitted for report display ... */"
+
+
+def _build_sample_profile(sample: dict[str, Any], metadata: dict[str, Any], functions: list[dict], artifacts: list[dict]) -> SampleProfile:
+    bitness = _as_int(metadata.get("bitness"), 32)
+    arch = str(metadata.get("architecture") or metadata.get("processor") or ("x86" if bitness == 32 else "x64"))
+    file_type = str(metadata.get("file_type") or metadata.get("format") or "Portable executable")
+    image_base = str(metadata.get("image_base") or "0x400000")
+    role = _sample_role(functions, artifacts)
+    badges = ["WINDOWS", f"PE{bitness}"]
+    if _has_network(functions, artifacts):
+        badges.append("NETWORK")
+    if any(_artifact_role(a) == "dropped_payload" for a in artifacts):
+        badges.append("STAGER")
+    if any(_artifact_role(a) == "persistence" for a in artifacts) or _text_has(functions, PERSISTENCE_TERMS):
+        badges.append("PERSISTENCE")
+    if _has_timing(functions):
+        badges.append("TIMING")
+    if len(badges) == 2:
+        badges.append("STATIC_ANALYSIS")
 
     return SampleProfile(
-        filename=filename,
-        sha256=sha256,
-        sha1=sha1,
-        md5=md5,
-        size=size,
+        filename=str(sample.get("filename") or "unknown.bin"),
+        sha256=str(sample.get("sha256") or ""),
+        sha1=str(sample.get("sha1") or ""),
+        md5=str(sample.get("md5") or ""),
+        size=_as_int(sample.get("size"), 0),
         file_type=file_type,
         architecture=arch,
         bitness=bitness,
         image_base=image_base,
-        analysis_timestamp=timestamp,
+        analysis_timestamp=str(sample.get("created_at") or ""),
         classification_badges=badges,
         observed_role=role,
-        primary_objective="Retrieve and execute secondary payload",
-        delivery_mechanism="Not established from this sample",
-        c2_retrieval_protocol="HTTP / WinINet",
-        persistence_status="Not observed in static analysis",
-        evasion_status="Timing / delay execution loop observed" if has_sleep else "Not observed",
-        impact_assessment="Dependent on retrieved secondary payload",
+        primary_objective=_primary_objective(functions, artifacts),
+        c2_retrieval_protocol=_network_protocol(functions, artifacts),
+        persistence_status="Observed" if "PERSISTENCE" in badges else "Not observed in static analysis",
+        evasion_status="Timing behavior observed" if _has_timing(functions) else "Not observed in static analysis",
         attribution_status="Not established",
-        confidence_overall="HIGH",
+        confidence_overall=_aggregate_confidence_label([float(f.get("confidence") or 0.0) for f in functions]),
     )
 
 
 def _score_and_categorize_functions(
-    func_rows: list[dict],
+    functions: list[dict],
     applied_names: dict[str, tuple[str, str]],
     import_usage: dict[str, list[str]],
-    artifact_rows: list[dict],
+    artifacts: list[dict],
+    flows: list[dict],
+    max_functions: int,
+    workspace: WorkspacePaths,
 ) -> tuple[list[KeyFunctionCard], list[dict[str, Any]]]:
-    key_cards: list[KeyFunctionCard] = []
-    runtime_helpers: list[dict[str, Any]] = []
+    artifacts_by_function: dict[str, list[str]] = {}
+    for artifact in artifacts:
+        function_address = artifact.get("function_address")
+        if function_address and _is_behavioral_artifact(artifact):
+            artifacts_by_function.setdefault(function_address, []).append(_artifact_display_value(artifact))
 
-    # Map artifacts by function address
-    artifacts_by_addr: dict[str, list[str]] = {}
-    for a in artifact_rows:
-        f_addr = a.get("function_address")
-        if f_addr:
-            artifacts_by_addr.setdefault(f_addr, []).append(a.get("original_value", ""))
+    callers: dict[str, int] = {}
+    callees: dict[str, int] = {}
+    for flow in flows:
+        callers[flow["target_function"]] = callers.get(flow["target_function"], 0) + 1
+        callees[flow["source_function"]] = callees.get(flow["source_function"], 0) + 1
 
-    for row in func_rows:
-        addr = row["address"]
-        orig_name = row.get("original_name") or f"sub_{addr}"
-        applied, idb_status = applied_names.get(addr, (row.get("proposed_name") or orig_name, "UNMODIFIED"))
-        display_name = applied if applied != orig_name else orig_name
-        summary = row.get("summary") or "Function logic analyzed."
-        raw_conf = float(row.get("confidence") or 0.8)
-        conf_label = "HIGH" if raw_conf >= 0.85 else "MEDIUM" if raw_conf >= 0.65 else "LOW"
-        apis = import_usage.get(addr, [])
-        arts = artifacts_by_addr.get(addr, [])
-
-        is_crt = any(crt in orig_name.lower() or crt in display_name.lower() for crt in CRT_RUNTIME_NAMES)
-        is_stub = any(stub == orig_name.lower() or stub == display_name.lower() for stub in STUB_NAMES)
-
-        # Calculate Analytical Importance Score
-        importance_score = 0.20
-
-        # Entry point / orchestration
-        if "main" in orig_name.lower() or "main" in display_name.lower() or addr in {"0x401080", "0x1000"}:
-            importance_score += 0.50
-
-        # Network APIs
-        if any(any(net in api.lower() for net in ["internet", "winhttp", "urldownload", "socket", "connect"]) for api in apis):
-            importance_score += 0.25
-
-        # Process / Execution APIs
-        if any(any(proc in api.lower() for proc in ["createprocess", "shellexecute", "winexec", "createthread"]) for api in apis):
-            importance_score += 0.25
-
-        # Timing / Evasion APIs
-        if any(any(t in api.lower() for t in ["perf_counter", "perf_frequency", "thrd_sleep", "sleep", "gettickcount"]) for api in apis):
-            importance_score += 0.20
-
-        # Attached artifacts
-        if arts:
-            importance_score += 0.20
-
-        # Penalize CRT runtime and stubs heavily
-        if is_crt:
-            importance_score -= 0.60
-        if is_stub:
-            importance_score -= 0.50
-
-        importance_score = max(0.05, min(0.99, importance_score))
-
-        if importance_score >= 0.70:
-            imp_label = ImportanceLevel.CRITICAL
-        elif importance_score >= 0.40:
-            imp_label = ImportanceLevel.HIGH
-        else:
-            imp_label = ImportanceLevel.SUPPORTING
+    cards: list[KeyFunctionCard] = []
+    helpers: list[dict[str, Any]] = []
+    for row in functions:
+        address = str(row["address"])
+        original = str(row.get("original_name") or f"sub_{address}")
+        applied, idb_status = applied_names.get(address, (row.get("proposed_name") or original, "UNMODIFIED"))
+        display_name = str(applied or original)
+        apis = sorted(set(import_usage.get(address, [])))
+        function_artifacts = artifacts_by_function.get(address, [])
+        original_code = _load_function_pseudocode(workspace, address)
+        original_code = _normalize_code_for_report(original_code)
+        readable_code = _build_readable_code(original_code, original, display_name, row.get("variables") or [], applied_names)
+        execution_flow = _build_function_execution_flow(row, display_name, apis, function_artifacts, original_code)
+        text = _function_text(row, display_name, apis, function_artifacts)
+        confidence = float(row.get("confidence") or 0.0)
+        is_runtime = _is_runtime_helper(original, display_name, text)
+        score = 0.12
+        if _looks_like_entry(original, display_name):
+            score += 0.35
+        score += min(0.18, callers.get(address, 0) * 0.03)
+        score += min(0.12, callees.get(address, 0) * 0.02)
+        if _has_any(text, NETWORK_APIS) or any(_artifact_type(a) in {"url", "domain", "ip"} for a in artifacts if a.get("function_address") == address):
+            score += 0.22
+        if _has_any(text, PROCESS_APIS):
+            score += 0.20
+        if _has_any(text, FILE_APIS) or any(_artifact_type(a) == "file_path" for a in artifacts if a.get("function_address") == address):
+            score += 0.14
+        if _has_any(text, TIMING_APIS):
+            score += 0.12
+        if function_artifacts:
+            score += min(0.16, len(function_artifacts) * 0.04)
+        if is_runtime:
+            score -= 0.55
+        score = round(max(0.05, min(score, 0.99)), 2)
+        importance = "CRITICAL" if score >= 0.70 else "HIGH" if score >= 0.40 else "SUPPORTING"
 
         card = KeyFunctionCard(
-            address=addr,
-            original_name=orig_name,
-            applied_name=applied if applied != orig_name else None,
+            address=address,
+            original_name=original,
+            applied_name=display_name if display_name != original else None,
             display_name=display_name,
-            role=_derive_function_role(display_name, apis, arts),
-            importance_score=round(importance_score, 2),
-            importance_label=imp_label,
-            confidence_label=conf_label,
-            confidence_score=raw_conf,
-            summary=summary,
-            behaviors=_derive_behaviors(apis, arts),
+            role=_derive_function_role(row, display_name, apis, function_artifacts),
+            importance_score=score,
+            importance_label=importance,
+            confidence_label=_confidence_label(confidence),
+            confidence_score=confidence,
+            summary=str(row.get("summary") or "Function behavior was validated from available static evidence."),
+            behaviors=_derive_behaviors(row, apis, function_artifacts),
             key_apis=apis[:8],
-            artifacts=arts[:4],
+            artifacts=function_artifacts[:6],
             related_functions=[],
+            pseudocode_snippet=_code_excerpt(original_code, max_lines=40) if original_code else None,
+            original_decompiled_code=_code_excerpt(original_code, max_lines=220) if original_code else None,
+            readable_code=_code_excerpt(readable_code, max_lines=220) if readable_code else None,
+            execution_flow=execution_flow,
             idb_status=idb_status,
         )
-
-        if is_crt or (is_stub and importance_score < 0.35):
-            runtime_helpers.append({
-                "address": addr,
-                "name": display_name,
-                "summary": summary,
-                "category": "CRT / Runtime Helper" if is_crt else "Utility Stub",
-            })
+        if is_runtime and score < 0.40:
+            helpers.append({"address": address, "name": display_name, "summary": card.summary, "category": "Runtime or compiler helper"})
         else:
-            key_cards.append(card)
+            cards.append(card)
 
-    # Sort key cards strictly by analytical importance score descending!
-    key_cards.sort(key=lambda c: (c.importance_score, c.confidence_score), reverse=True)
-    return key_cards, runtime_helpers
+    cards.sort(key=lambda item: (item.importance_score, item.confidence_score, item.address), reverse=True)
+    selected: list[KeyFunctionCard] = []
+    omitted: list[KeyFunctionCard] = []
+    for card in cards:
+        if _should_surface_key_function(card):
+            selected.append(card)
+        else:
+            omitted.append(card)
 
+    if not selected and cards:
+        selected.append(cards[0])
+        omitted = cards[1:]
 
-def _derive_function_role(name: str, apis: list[str], arts: list[str]) -> str:
-    name_lower = name.lower()
-    if "main" in name_lower:
-        return "Primary Downloader & Staging Orchestration"
-    if "sleep" in name_lower or "timed" in name_lower:
-        return "Anti-Analysis Timing Delay & Evasion"
-    if "format" in name_lower or "wstring" in name_lower:
-        return "Command & String Buffer Formatting Utility"
-    if any("urldownload" in api.lower() or "internet" in api.lower() for api in apis):
-        return "Remote Payload Retrieval & Network Communication"
-    if any("createprocess" in api.lower() or "shellexecute" in api.lower() for api in apis):
-        return "Payload Execution & Process Launcher"
-    return "Supporting Binary Logic"
+    for card in omitted:
+        helpers.append(
+            {
+                "address": card.address,
+                "name": card.display_name,
+                "summary": card.summary,
+                "category": "Supporting or low-signal routine",
+            }
+        )
 
-
-def _derive_behaviors(apis: list[str], arts: list[str]) -> list[str]:
-    behaviors = []
-    apis_lower = [a.lower() for a in apis]
-    if any("internetopen" in a for a in apis_lower):
-        behaviors.append("Initializes WinINet HTTP session")
-    if any("urldownload" in a for a in apis_lower):
-        behaviors.append("Downloads remote payload directly to disk")
-    if any("internetopenurl" in a for a in apis_lower):
-        behaviors.append("Performs secondary HTTP check-in / beacon")
-    if any("createprocess" in a for a in apis_lower) or any("shellexecute" in a for a in apis_lower):
-        behaviors.append("Spawns external process or executes shell commands")
-    if any("sleep" in a or "perf_counter" in a for a in apis_lower):
-        behaviors.append("Implements high-resolution timer delays")
-    if any("del" in a.lower() for a in arts):
-        behaviors.append("Dispatches hidden command-shell self-deletion routine")
-    if not behaviors:
-        behaviors.append("Internal state or helper processing")
-    return behaviors
+    return selected[:max_functions], helpers
 
 
-def _build_indicators(artifact_rows: list[dict], defang: bool) -> list[IOCItem]:
+def _build_indicators(artifacts: list[dict], defang: bool) -> list[IOCItem]:
     items: list[IOCItem] = []
-    for a in artifact_rows:
-        val = a.get("original_value", "")
-        raw_type = a.get("artifact_type", "")
-        role = a.get("role", "")
-        func_addr = a.get("function_address") or "Static Data"
-        conf = "HIGH" if float(a.get("confidence") or 0.8) >= 0.85 else "MEDIUM"
-
-        if raw_type == "url":
-            ioc_type = IOCType.NETWORK_IOC
-            role_desc = "C2 / Payload Download URL"
-        elif raw_type == "file_path" or role == "dropped_payload":
-            ioc_type = IOCType.HOST_IOC
-            role_desc = "Staged Payload Destination"
-        elif raw_type == "pdb_path" or role == "build_artifact":
-            ioc_type = IOCType.BUILD_ARTIFACT
-            role_desc = "Compiler PDB Symbol Path"
-        elif raw_type == "command_line" or "cmd.exe" in val:
-            ioc_type = IOCType.COMMAND_LINE_ARTIFACT
-            role_desc = "Self-Deletion / Execution Command"
-        elif raw_type == "user_agent":
-            ioc_type = IOCType.CONTEXTUAL_ARTIFACT
-            role_desc = "HTTP User-Agent Header"
-        else:
-            ioc_type = IOCType.CONTEXTUAL_ARTIFACT
-            role_desc = "Static String Artifact"
-
-        display = defang_indicator(val, raw_type) if defang else val
+    seen: set[tuple[str, str, str | None]] = set()
+    for artifact in artifacts:
+        value = _artifact_display_value(artifact)
+        if not value:
+            continue
+        raw_type = _artifact_type(artifact)
+        role = _artifact_role(artifact)
+        key = (raw_type, value, artifact.get("function_address"))
+        if key in seen:
+            continue
+        seen.add(key)
+        ioc_type, role_desc = _indicator_type_and_role(raw_type, role, value)
         items.append(
             IOCItem(
                 ioc_type=ioc_type,
-                value=val,
-                display_value=display,
+                value=value,
+                display_value=defang_indicator(value, raw_type) if defang else value,
                 role=role_desc,
-                source="Binary Read-Only Section",
-                function=func_addr,
-                confidence_label=conf,
+                source=_evidence_source(artifact),
+                function=str(artifact.get("function_address") or "Static Data"),
+                confidence_label=_confidence_label(float(artifact.get("confidence") or 0.0)),
             )
         )
     return items
 
 
 def _build_semantic_execution_chain(
-    func_rows: list[dict],
-    artifact_rows: list[dict],
-    key_functions: list[KeyFunctionCard],
+    functions: list[KeyFunctionCard],
+    artifacts: list[dict],
+    flows: list[dict],
 ) -> list[ExecutionChainStage]:
-    chain: list[ExecutionChainStage] = []
-
-    # Stage 1: Initialization
-    chain.append(
-        ExecutionChainStage(
-            step_number=1,
-            stage_name="Initialization & Session Setup",
-            description="Entry point initializes execution environment and creates a WinINet HTTP session with User-Agent 'Mozilla/5.0'.",
-            apis=["InternetOpenW", "GetModuleFileNameW"],
-            artifacts=["Mozilla/5.0"],
-            functions=["_main (0x401080)"],
+    stages: list[ExecutionChainStage] = []
+    important = functions[:6]
+    entry = next((fn for fn in important if _looks_like_entry(fn.original_name, fn.display_name)), important[0] if important else None)
+    if entry:
+        stages.append(
+            ExecutionChainStage(
+                step_number=1,
+                stage_name="Initialization",
+                description=f"Execution begins in `{entry.display_name}` and reaches malware-relevant logic identified by static analysis.",
+                apis=entry.key_apis[:3],
+                artifacts=[],
+                functions=[_function_ref(entry)],
+            )
         )
-    )
+    if any(_has_any(_card_text(fn), TIMING_APIS) for fn in important):
+        fn = _best_stage_function(important, role_terms=("timing", "delay"), text_terms=TIMING_APIS) or entry
+        stages.append(_stage("Anti-Analysis / Timing", "Timing or delay behavior is present before or during the main workflow.", fn))
+    if any(_has_any(_card_text(fn), NETWORK_APIS) for fn in important) or any(i.get("artifact_type") in {"url", "domain", "ip"} for i in artifacts):
+        fn = next((fn for fn in important if _has_any(_card_text(fn), NETWORK_APIS)), entry)
+        stages.append(_stage("Network Communication", "The sample references network material or networking APIs for external communication or retrieval.", fn, artifacts, {"url", "domain", "ip"}))
+    if any(_artifact_role(a) == "dropped_payload" or _artifact_type(a) == "file_path" for a in artifacts):
+        fn = _function_for_artifacts(important, artifacts, {"file_path"}) or entry
+        stages.append(_stage("Payload Staging / File Artifact", "A file-system artifact is associated with staging, writing, reading, or later consumption.", fn, artifacts, {"file_path"}))
+    if any(_has_any(_card_text(fn), PROCESS_APIS) for fn in important) or any(_artifact_type(a) == "command_line" for a in artifacts):
+        fn = next((fn for fn in important if _has_any(_card_text(fn), PROCESS_APIS)), entry)
+        stages.append(_stage("Execution / Command Launch", "Process or command execution evidence is present.", fn, artifacts, {"command_line"}))
+    if any(_artifact_role(a) == "persistence" for a in artifacts) or any(_has_any(_card_text(fn), PERSISTENCE_TERMS) for fn in important):
+        fn = _function_for_artifacts(important, artifacts, {"registry_path"}) or entry
+        stages.append(_stage("Persistence", "Persistence-related artifact or behavior is supported by validated evidence.", fn, artifacts, {"registry_path"}))
+    if any("del " in str(a.get("original_value", "")).lower() or "delete" in str(a.get("usage", "")).lower() for a in artifacts):
+        fn = _function_for_artifacts(important, artifacts, {"command_line"}) or entry
+        stages.append(_stage("Cleanup / Artifact Removal", "Command or API evidence indicates cleanup or file deletion behavior.", fn, artifacts, {"command_line"}))
 
-    # Stage 2: Anti-Analysis Timing Delay
-    chain.append(
-        ExecutionChainStage(
-            step_number=2,
-            stage_name="Anti-Analysis Timing Delay",
-            description="Calls high-resolution timing delay function (2000 ms) using performance counters to evade automated sandbox hooks.",
-            apis=["Query_perf_counter", "Query_perf_frequency", "Thrd_sleep"],
-            artifacts=[],
-            functions=["timed_sleep_loop (0x4011e0)"],
-        )
-    )
-
-    # Stage 3: Remote Payload Download
-    chain.append(
-        ExecutionChainStage(
-            step_number=3,
-            stage_name="Remote Ingress & Payload Retrieval",
-            description="Retrieves a remote payload disguised with a '.ico' extension from the designated staging server over HTTP.",
-            apis=["URLDownloadToFileW"],
-            artifacts=["http://ssl-6582datamanager.helpdeskbros.local/favicon.ico"],
-            functions=["_main (0x401080)"],
-        )
-    )
-
-    # Stage 4: Local Staging
-    chain.append(
-        ExecutionChainStage(
-            step_number=4,
-            stage_name="Local Payload Staging",
-            description="Writes the retrieved binary directly to a fixed persistent path under Public Documents.",
-            apis=["URLDownloadToFileW"],
-            artifacts=["C:\\Users\\Public\\Documents\\CR433101.dat.exe"],
-            functions=["_main (0x401080)"],
-        )
-    )
-
-    # Stage 5: Secondary Beacon & Execution
-    chain.append(
-        ExecutionChainStage(
-            step_number=5,
-            stage_name="Payload Execution & Check-In",
-            description="Upon successful download, checks in with secondary endpoint (huskyhacks.dev) and spawns the staged payload with delay via ShellExecuteW.",
-            apis=["InternetOpenUrlW", "ShellExecuteW"],
-            artifacts=["http://huskyhacks.dev", "ping 1.1.1.1 -n 1 -w 3000 > Nul & C:\\Users\\Public\\Documents\\CR433101.dat.exe"],
-            functions=["_main (0x401080)"],
-        )
-    )
-
-    # Stage 6: Anti-Forensic Self-Deletion (Failure Branch)
-    chain.append(
-        ExecutionChainStage(
-            step_number=6,
-            stage_name="Anti-Forensic Self-Deletion (On Failure)",
-            description="If remote download fails, constructs an obfuscated shell command and executes it invisibly via CreateProcessW (CREATE_NO_WINDOW) to delete itself from disk.",
-            apis=["CreateProcessW", "CloseHandle"],
-            artifacts=["cmd.exe /C ping 1.1.1.1 -n 1 -w 3000 > Nul & Del /f /q \"%s\""],
-            functions=["_main (0x401080)", "formatted_output_wstring (0x401010)"],
-            is_failure_path=True,
-        )
-    )
-
-    return chain
+    for index, stage in enumerate(stages, 1):
+        stage.step_number = index
+    return stages
 
 
 def _build_technical_analysis(
-    func_rows: list[dict],
-    artifact_rows: list[dict],
-    key_functions: list[KeyFunctionCard],
+    functions: list[KeyFunctionCard],
     indicators: list[IOCItem],
+    configuration_items: list[dict],
+    chain: list[ExecutionChainStage],
 ) -> list[TechnicalBehaviorSection]:
     sections: list[TechnicalBehaviorSection] = []
-
-    # 4.1 Initialization & Environment
-    sections.append(
-        TechnicalBehaviorSection(
-            section_id="initialization",
-            title="Initialization & Session Setup",
-            narrative=(
-                "Execution begins at the entry point `_main` (0x401080). The routine immediately initializes "
-                "a WinINet session via `InternetOpenW`, configuring a standard desktop User-Agent string "
-                "(`Mozilla/5.0`). It allocates stack storage for process initialization structures (`STARTUPINFOW` "
-                "and `PROCESS_INFORMATION`) before proceeding to evasive sleep logic."
-            ),
-            functions=["_main (0x401080)"],
-            apis=["InternetOpenW", "GetModuleFileNameW"],
-            artifacts=["Mozilla/5.0"],
-            confidence_label="HIGH",
-            evidence=[{"source": "IDA_OBSERVED", "description": "Call to InternetOpenW at 0x401080 with User-Agent Mozilla/5.0"}],
+    for stage in chain:
+        evidence = [{"source": "VALIDATED_ANALYSIS", "description": stage.description}]
+        sections.append(
+            TechnicalBehaviorSection(
+                section_id=_slug(stage.stage_name),
+                title=stage.stage_name,
+                narrative=_narrative_for_stage(stage, indicators),
+                functions=stage.functions,
+                apis=stage.apis,
+                artifacts=stage.artifacts,
+                confidence_label="HIGH" if stage.apis or stage.artifacts or stage.functions else "MEDIUM",
+                evidence=evidence,
+            )
         )
-    )
-
-    # 4.2 Anti-Analysis / Timing Evasion
-    sections.append(
-        TechnicalBehaviorSection(
-            section_id="timing_evasion",
-            title="Anti-Analysis & Timing Evasion",
-            narrative=(
-                "Prior to initiating network communication, the downloader calls `timed_sleep_loop` (0x4011e0) "
-                "with an initial duration parameter corresponding to 2,000 milliseconds (2 seconds). Rather than relying "
-                "on a direct `Sleep()` API call—which is commonly hooked and accelerated by dynamic analysis sandboxes—"
-                "the binary invokes high-resolution performance counters (`Query_perf_counter`, `Query_perf_frequency`) "
-                "in a loop combined with `Thrd_sleep` calls. A secondary 200 ms sleep loop executes post-download."
-            ),
-            functions=["timed_sleep_loop (0x4011e0)", "_main (0x401080)"],
-            apis=["Query_perf_counter", "Query_perf_frequency", "Thrd_sleep", "Xtime_get_ticks"],
-            artifacts=[],
-            confidence_label="HIGH",
-            evidence=[{"source": "IDA_OBSERVED", "description": "High-resolution timer loop at 0x4011e0"}],
+    if configuration_items:
+        reportable_items = [item for item in configuration_items if _is_reportable_value(str(item.get("value") or ""))]
+        items = ", ".join(f"`{key}`" for key in dict.fromkeys(str(item["key"]) for item in reportable_items[:5]))
+        sections.append(
+            TechnicalBehaviorSection(
+                section_id="configuration",
+                title="Configuration",
+                narrative=f"Validated configuration-like material was recovered: {items}. Values are presented only where backed by artifact evidence.",
+                functions=[str(item.get("function_address")) for item in configuration_items if item.get("function_address")],
+                artifacts=[_compact_evidence_value(str(item.get("value"))) for item in reportable_items if item.get("value")],
+                confidence_label=_aggregate_confidence_label([float(item.get("confidence") or 0.0) for item in configuration_items]),
+                evidence=[{"source": "VALIDATED_ANALYSIS", "description": "configuration_items rows"}],
+            )
         )
-    )
-
-    # 4.3 Network Communication & Retrieval
-    sections.append(
-        TechnicalBehaviorSection(
-            section_id="network_retrieval",
-            title="Network Communication & Payload Retrieval",
-            narrative=(
-                "The downloader communicates over HTTP using two distinct mechanisms. Primary payload ingress is "
-                "performed using `URLDownloadToFileW`, fetching an executable disguised as an icon (`favicon.ico`) "
-                "from `http://ssl-6582datamanager.helpdeskbros.local/favicon.ico`. Upon download completion, a secondary "
-                "HTTP GET request is dispatched via `InternetOpenUrlW` to `http://huskyhacks.dev`, serving as an operational "
-                "beacon or secondary communication channel."
-            ),
-            functions=["_main (0x401080)"],
-            apis=["URLDownloadToFileW", "InternetOpenUrlW"],
-            artifacts=[
-                "http://ssl-6582datamanager.helpdeskbros.local/favicon.ico",
-                "http://huskyhacks.dev",
-            ],
-            confidence_label="HIGH",
-            evidence=[{"source": "IDA_OBSERVED", "description": "URLDownloadToFileW and InternetOpenUrlW calls in _main"}],
-        )
-    )
-
-    # 4.4 Payload Staging
-    sections.append(
-        TechnicalBehaviorSection(
-            section_id="payload_staging",
-            title="Local Payload Staging",
-            narrative=(
-                "The remote file retrieved from the network is written directly to disk at "
-                "`C:\\Users\\Public\\Documents\\CR433101.dat.exe`. The `C:\\Users\\Public` tree is frequently targeted "
-                "by loaders and droppers due to write permissions typically granted to low-privileged standard user accounts."
-            ),
-            functions=["_main (0x401080)"],
-            apis=["URLDownloadToFileW"],
-            artifacts=["C:\\Users\\Public\\Documents\\CR433101.dat.exe"],
-            confidence_label="HIGH",
-            evidence=[{"source": "IDA_OBSERVED", "description": "Hardcoded destination path in .rdata at 0x403230"}],
-        )
-    )
-
-    # 4.5 Execution
-    sections.append(
-        TechnicalBehaviorSection(
-            section_id="payload_execution",
-            title="Payload Execution",
-            narrative=(
-                "Following staging, `_main` executes the payload using `ShellExecuteW`. The command parameter "
-                "combines an ICMP timeout with direct executable invocation: "
-                "`ping 1.1.1.1 -n 1 -w 3000 > Nul & C:\\Users\\Public\\Documents\\CR433101.dat.exe`. "
-                "This introduces a 3-second delay prior to launching the payload, providing buffer time for file system flushing."
-            ),
-            functions=["_main (0x401080)"],
-            apis=["ShellExecuteW"],
-            artifacts=["ping 1.1.1.1 -n 1 -w 3000 > Nul & C:\\Users\\Public\\Documents\\CR433101.dat.exe"],
-            confidence_label="HIGH",
-            evidence=[{"source": "IDA_OBSERVED", "description": "ShellExecuteW call at 0x40113c with execution command"}],
-        )
-    )
-
-    # 4.6 Cleanup / Self-Deletion
-    sections.append(
-        TechnicalBehaviorSection(
-            section_id="self_deletion",
-            title="Cleanup & Self-Deletion",
-            narrative=(
-                "If `URLDownloadToFileW` returns a non-zero error code (indicating transfer failure), the binary takes "
-                "an anti-forensic evasion branch. It retrieves its own file path via `GetModuleFileNameW`, formats "
-                "a command string (`cmd.exe /C ping 1.1.1.1 -n 1 -w 3000 > Nul & Del /f /q \"%s\"`) using helper `sub_401010`, "
-                "and executes the command line invisibly via `CreateProcessW` with `CREATE_NO_WINDOW` (0x08000000). "
-                "This securely purges the sample from disk to prevent forensic acquisition."
-            ),
-            functions=["_main (0x401080)", "formatted_output_wstring (0x401010)"],
-            apis=["CreateProcessW", "GetModuleFileNameW", "CloseHandle"],
-            artifacts=["cmd.exe /C ping 1.1.1.1 -n 1 -w 3000 > Nul & Del /f /q \"%s\""],
-            confidence_label="HIGH",
-            evidence=[{"source": "IDA_OBSERVED", "description": "CreateProcessW call with self-deletion command line at 0x401185"}],
-        )
-    )
-
-    # 4.7 Persistence
-    sections.append(
-        TechnicalBehaviorSection(
-            section_id="persistence",
-            title="Persistence Assessment",
-            narrative=(
-                "No persistence mechanisms (such as Run registry keys, Scheduled Tasks, Startup folder placement, "
-                "or Windows Service registrations) were identified during static reverse engineering. "
-                "The sample acts as a transient first-stage stager designed to retrieve and execute secondary payloads."
-            ),
-            functions=[],
-            apis=[],
-            artifacts=[],
-            confidence_label="HIGH",
-            evidence=[{"source": "STATIC_AUDIT", "description": "No autostart registry APIs, service APIs, or task scheduler COM interfaces found."}],
-        )
-    )
-
     return sections
 
 
-def _build_executive_assessment(profile: SampleProfile, key_functions: list[KeyFunctionCard], indicators: list[IOCItem]) -> str:
-    return (
-        f"**{profile.filename}** is a 32-bit Windows downloader that retrieves a secondary payload over HTTP, "
-        f"writes the retrieved content to a fixed path under `C:\\Users\\Public\\Documents`, executes the staged payload, "
-        f"and removes artifacts using command-shell operations.\n\n"
-        "Static analysis identified WinINet-based retrieval logic and process execution through `ShellExecuteW`/`CreateProcessW`. "
-        "The binary also contains timing behavior that may delay execution and command sequences capable of deleting the original executable.\n\n"
-        "Analysis recovered two embedded network references and a fixed staging path. A PDB artifact references the "
-        "`HuskyHacks\\PMAT-maldev\\src\\DownloadFromURL` project. This is useful development/build context but should not "
-        "independently be treated as threat-actor or campaign attribution."
-    )
+def _build_executive_assessment(
+    profile: SampleProfile,
+    functions: list[KeyFunctionCard],
+    indicators: list[IOCItem],
+    chain: list[ExecutionChainStage],
+) -> str:
+    facts: list[str] = []
+    if any(item.ioc_type == IOCType.NETWORK_IOC for item in indicators) or any("Network" in stage.stage_name for stage in chain):
+        facts.append("network communication or retrieval behavior")
+    if any(item.ioc_type == IOCType.HOST_IOC for item in indicators):
+        facts.append("host file artifacts")
+    if any("Execution" in stage.stage_name for stage in chain):
+        facts.append("process or command execution")
+    if any("Timing" in stage.stage_name for stage in chain):
+        facts.append("timing behavior that may affect sandbox execution")
+    if any("Cleanup" in stage.stage_name for stage in chain):
+        facts.append("artifact cleanup or deletion behavior")
+    observed = ", ".join(facts) if facts else "the validated function behavior present in the current analysis"
+    top = functions[0].display_name if functions else "the analyzed code"
+    build_artifacts = [item.display_value for item in indicators if item.ioc_type == IOCType.BUILD_ARTIFACT]
+
+    paragraphs = [
+        f"**{profile.filename}** is a {profile.bitness}-bit Windows sample assessed as **{profile.observed_role}** based on validated static-analysis evidence.",
+        f"The strongest available evidence centers on `{top}` and supports {observed}. Confidence reflects evidence quality, not analyst certainty about unobserved runtime behavior.",
+    ]
+    if build_artifacts:
+        paragraphs.append(
+            "Build or development artifacts were recovered and are useful for context, but they do not establish campaign, malware-family, or threat-actor attribution by themselves."
+        )
+    else:
+        paragraphs.append("No evidence in the current report establishes campaign, malware-family, or threat-actor attribution.")
+    return "\n\n".join(paragraphs)
 
 
 def _build_key_findings(
-    profile: SampleProfile,
-    key_functions: list[KeyFunctionCard],
+    functions: list[KeyFunctionCard],
     indicators: list[IOCItem],
     chain: list[ExecutionChainStage],
 ) -> list[KeyFinding]:
-    return [
-        KeyFinding(
-            number="01",
-            title="DOWNLOADER",
-            summary="Retrieves secondary content over HTTP using WinINet and URLDownloadToFileW.",
-            confidence_label="HIGH",
-            evidence_summary="Calls URLDownloadToFileW targeting http://ssl-6582datamanager.helpdeskbros.local/favicon.ico.",
-        ),
-        KeyFinding(
-            number="02",
-            title="FIXED STAGING PATH",
-            summary="Writes the downloaded payload directly to C:\\Users\\Public\\Documents\\CR433101.dat.exe.",
-            confidence_label="HIGH",
-            evidence_summary="Destination path hardcoded in read-only section .rdata at 0x403230.",
-        ),
-        KeyFinding(
-            number="03",
-            title="PAYLOAD EXECUTION",
-            summary="Launches staged content using Windows process and shell execution APIs (ShellExecuteW).",
-            confidence_label="HIGH",
-            evidence_summary="Executes command line via ShellExecuteW with 3-second ping delay.",
-        ),
-        KeyFinding(
-            number="04",
-            title="TIMING BEHAVIOR",
-            summary="Contains high-resolution timing/delay logic (timed_sleep_loop) potentially relevant to sandbox avoidance.",
-            confidence_label="HIGH",
-            evidence_summary="Measures performance frequency and counter ticks to loop Thrd_sleep for 2000ms.",
-        ),
-        KeyFinding(
-            number="05",
-            title="ANTI-FORENSIC CLEANUP",
-            summary="Uses hidden command-shell deletion logic (cmd.exe /C ping ... & Del) to purge the binary on failure.",
-            confidence_label="HIGH",
-            evidence_summary="Spawns cmd.exe via CreateProcessW with CREATE_NO_WINDOW flag (0x08000000).",
-        ),
-        KeyFinding(
-            number="06",
-            title="BUILD ARTIFACT",
-            summary="Embedded PDB path references the PMAT-maldev DownloadFromURL project.",
-            confidence_label="HIGH",
-            evidence_summary="String at 0x40351c: C:\\Users\\Matt\\source\\repos\\HuskyHacks\\PMAT-maldev\\src\\DownloadFromURL\\Release\\DownloadFromURL.pdb.",
-        ),
-    ]
-
-
-def _build_api_sequences(key_functions: list[KeyFunctionCard]) -> list[APISequence]:
-    return [
-        APISequence(
-            name="Downloader & Stager Sequence",
-            description="Linear progression from network session creation to payload execution.",
-            apis=[
-                "InternetOpenW",
-                "Query_perf_counter / Thrd_sleep",
-                "URLDownloadToFileW",
-                "InternetOpenUrlW",
-                "ShellExecuteW",
-            ],
-            function="_main (0x401080)",
-        ),
-        APISequence(
-            name="Self-Deletion Sequence (Failure Branch)",
-            description="Anti-forensic fallback sequence when download is unsuccessful.",
-            apis=[
-                "GetModuleFileNameW",
-                "_stdio_common_vswprintf",
-                "CreateProcessW (CREATE_NO_WINDOW)",
-                "CloseHandle",
-            ],
-            function="_main (0x401080)",
-        ),
-    ]
-
-
-def _build_structures(structure_rows: list[dict]) -> list[RecoveredStructure]:
-    res: list[RecoveredStructure] = []
-    for r in structure_rows:
-        res.append(
-            RecoveredStructure(
-                name=r.get("name") or "RecoveredStruct",
-                size=r.get("size"),
-                fields=[],
-                confidence_label="HIGH",
+    findings: list[KeyFinding] = []
+    for stage in chain[:5]:
+        findings.append(
+            KeyFinding(
+                number=f"{len(findings) + 1:02d}",
+                title=stage.stage_name.upper(),
+                summary=stage.description,
+                confidence_label="HIGH" if stage.apis or stage.artifacts else "MEDIUM",
+                evidence_summary=", ".join(stage.apis[:3] + stage.artifacts[:2] + stage.functions[:1]),
             )
         )
-    return res
+    for ioc_type, title in (
+        (IOCType.NETWORK_IOC, "NETWORK ARTIFACTS"),
+        (IOCType.HOST_IOC, "HOST ARTIFACTS"),
+        (IOCType.BUILD_ARTIFACT, "BUILD CONTEXT"),
+    ):
+        matching = [item for item in indicators if item.ioc_type == ioc_type]
+        if matching and len(findings) < 8:
+            findings.append(
+                KeyFinding(
+                    number=f"{len(findings) + 1:02d}",
+                    title=title,
+                    summary=f"{len(matching)} {ioc_type.lower()} item(s) were classified with supporting function or static-data context.",
+                    confidence_label=_aggregate_confidence_label([1.0 if item.confidence_label == "HIGH" else 0.7 for item in matching]),
+                    evidence_summary=matching[0].display_value,
+                )
+            )
+    if not findings and functions:
+        fn = functions[0]
+        findings.append(
+            KeyFinding(
+                number="01",
+                title="PRIMARY FUNCTION",
+                summary=f"`{fn.display_name}` is the highest-importance validated function.",
+                confidence_label=fn.confidence_label,
+                evidence_summary=fn.summary,
+            )
+        )
+    return findings
 
 
-def _build_threat_intel(artifact_rows: list[dict], indicators: list[IOCItem], profile: SampleProfile) -> ThreatIntelligenceModel:
-    net_items = [
-        {"endpoint": i.display_value, "role": i.role, "observation_type": "OBSERVED", "confidence": i.confidence_label}
-        for i in indicators if i.ioc_type == IOCType.NETWORK_IOC
+def _build_api_sequences(chain: list[ExecutionChainStage]) -> list[APISequence]:
+    apis = []
+    for stage in chain:
+        for api in stage.apis:
+            if api not in apis:
+                apis.append(api)
+    if not apis:
+        return []
+    return [
+        APISequence(
+            name="Validated Behavior Sequence",
+            description="Ordered from the semantic execution chain; this is not a raw call graph.",
+            apis=apis,
+            function=", ".join(dict.fromkeys(fn for stage in chain for fn in stage.functions)),
+        )
     ]
-    host_items = [
-        {"path": i.display_value, "role": i.role, "observation_type": "OBSERVED", "confidence": i.confidence_label}
-        for i in indicators if i.ioc_type == IOCType.HOST_IOC
+
+
+def _build_structures(rows: list[dict]) -> list[RecoveredStructure]:
+    return [
+        RecoveredStructure(
+            name=str(row.get("name") or "RecoveredStructure"),
+            size=row.get("size"),
+            fields=[],
+            confidence_label=_confidence_label(float(row.get("confidence") or 0.0)),
+        )
+        for row in rows
     ]
-    build_items = [
-        {"artifact": i.display_value, "role": i.role, "observation_type": "OBSERVED", "confidence": i.confidence_label}
-        for i in indicators if i.ioc_type == IOCType.BUILD_ARTIFACT
-    ]
 
-    dev_context = (
-        "The sample embeds a complete PDB debugging path: "
-        "`C:\\Users\\Matt\\source\\repos\\HuskyHacks\\PMAT-maldev\\src\\DownloadFromURL\\Release\\DownloadFromURL.pdb`. "
-        "This artifact directly associates the source code with the Practical Malware Analysis & Triage (PMAT) "
-        "training curriculum developed by HuskyHacks (Matt Kiely). The project name `DownloadFromURL` accurately "
-        "describes the single-purpose staging function of the binary. This represents technical development context."
-    )
 
-    campaign_context = (
-        "No threat actor infrastructure overlaps, campaign identifiers, or victimology telemetries are established. "
-        "Static evidence is consistent with a training or demonstration stager rather than an in-the-wild targeted campaign."
-    )
-
+def _build_threat_intel(indicators: list[IOCItem], profile: SampleProfile) -> ThreatIntelligenceModel:
+    build_values = [item.display_value for item in indicators if item.ioc_type == IOCType.BUILD_ARTIFACT]
+    if any("pmat" in item.lower() or "huskyhacks" in item.lower() for item in build_values):
+        development_context = (
+            "Build artifacts reference a HuskyHacks/PMAT-maldev development path. "
+            "This is useful provenance context, not threat-actor attribution."
+        )
+    elif build_values:
+        development_context = "Build artifacts are presented as development context only."
+    else:
+        development_context = "No build artifacts were recovered."
     return ThreatIntelligenceModel(
-        network_infrastructure=net_items,
-        host_artifacts=host_items,
-        build_artifacts=build_items,
-        behavioral_characteristics=[
-            {"trait": "Evasion", "detail": "High-resolution performance counter delays combined with ICMP ping timeouts."},
-            {"trait": "Staging", "detail": "Direct write to low-privilege Public Documents directory."},
-            {"trait": "Cleanup", "detail": "Asynchronous cmd.exe self-deletion loop."},
+        network_infrastructure=[
+            {"endpoint": item.display_value, "role": item.role, "observation_type": "OBSERVED", "confidence": item.confidence_label}
+            for item in indicators
+            if item.ioc_type == IOCType.NETWORK_IOC
         ],
-        development_context=dev_context,
-        campaign_assessment=campaign_context,
-        actor_assessment="Attribution is not established from static evidence.",
+        host_artifacts=[
+            {"path": item.display_value, "role": item.role, "observation_type": "OBSERVED", "confidence": item.confidence_label}
+            for item in indicators
+            if item.ioc_type in {IOCType.HOST_IOC, IOCType.COMMAND_LINE_ARTIFACT}
+        ],
+        build_artifacts=[
+            {"artifact": item.display_value, "role": item.role, "observation_type": "OBSERVED", "confidence": item.confidence_label}
+            for item in indicators
+            if item.ioc_type == IOCType.BUILD_ARTIFACT
+        ],
+        behavioral_characteristics=[
+            {"trait": badge, "detail": f"{badge} behavior is supported by validated static evidence."}
+            for badge in profile.classification_badges
+            if badge not in {"WINDOWS", f"PE{profile.bitness}", "STATIC_ANALYSIS"}
+        ],
+        development_context=development_context,
+        campaign_assessment="Not established from static analysis.",
+        actor_assessment="Not established from static analysis.",
         attribution_status="NOT ESTABLISHED",
     )
 
 
 def _build_attack_mappings(
-    key_functions: list[KeyFunctionCard],
-    artifact_rows: list[dict],
-    indicators: list[IOCItem],
-) -> list[AttackMappingDetail]:
-    mappings: list[AttackMappingDetail] = [
-        AttackMappingDetail(
-            tactic="Command and Control",
-            technique="Ingress Tool Transfer",
-            technique_id="T1105",
-            observed_behavior="Retrieves external executable payload from remote staging endpoint over HTTP.",
-            evidence="Calls URLDownloadToFileW to transfer favicon.ico to CR433101.dat.exe.",
-            functions=["_main (0x401080)"],
-            confidence_label="HIGH",
-        ),
-        AttackMappingDetail(
-            tactic="Command and Control",
-            technique="Application Layer Protocol: Web Protocols",
-            technique_id="T1071.001",
-            observed_behavior="Communicates with remote web servers via HTTP GET requests using WinINet.",
-            evidence="Calls InternetOpenW with 'Mozilla/5.0' and InternetOpenUrlW targeting huskyhacks.dev.",
-            functions=["_main (0x401080)"],
-            confidence_label="HIGH",
-        ),
-        AttackMappingDetail(
-            tactic="Defense Evasion",
-            technique="Virtualization/Sandbox Evasion: Time Based Evasion",
-            technique_id="T1497.003",
-            observed_behavior="Executes delay loops using high-resolution performance counters and ICMP ping timeouts.",
-            evidence="Loops Query_perf_counter and Thrd_sleep in timed_sleep_loop (0x4011e0); cmd.exe ping timeout.",
-            functions=["timed_sleep_loop (0x4011e0)", "_main (0x401080)"],
-            confidence_label="HIGH",
-        ),
-        AttackMappingDetail(
-            tactic="Defense Evasion",
-            technique="Indicator Removal: File Deletion",
-            technique_id="T1070.004",
-            observed_behavior="Spawns command-line script to delete the original executable from disk upon failure.",
-            evidence="Executes 'cmd.exe /C ping 1.1.1.1 ... & Del /f /q \"%s\"' via CreateProcessW.",
-            functions=["_main (0x401080)"],
-            confidence_label="HIGH",
-        ),
-        AttackMappingDetail(
-            tactic="Defense Evasion",
-            technique="Masquerading: Match Legitimate Name or Extension",
-            technique_id="T1036.005",
-            observed_behavior="Transfers executable binary disguised under an icon (.ico) file extension.",
-            evidence="URL path references 'favicon.ico' while writing to executable destination 'CR433101.dat.exe'.",
-            functions=["_main (0x401080)"],
-            confidence_label="HIGH",
-        ),
-        AttackMappingDetail(
-            tactic="Execution",
-            technique="Command and Scripting Interpreter: Windows Command Shell",
-            technique_id="T1059.003",
-            observed_behavior="Spawns cmd.exe to execute command sequences for delayed launch and self-deletion.",
-            evidence="Constructs cmd.exe command lines and invokes CreateProcessW / ShellExecuteW.",
-            functions=["_main (0x401080)"],
-            confidence_label="HIGH",
-        ),
-        AttackMappingDetail(
-            tactic="Execution",
-            technique="Native API",
-            technique_id="T1106",
-            observed_behavior="Invokes native Win32 execution APIs directly rather than script interpreters.",
-            evidence="Calls ShellExecuteW and CreateProcessW.",
-            functions=["_main (0x401080)"],
-            confidence_label="HIGH",
-        ),
-    ]
-    return mappings
-
-
-def _build_hunting_leads(
-    profile: SampleProfile,
+    functions: list[KeyFunctionCard],
     indicators: list[IOCItem],
     chain: list[ExecutionChainStage],
-) -> list[HuntingLead]:
-    return [
-        HuntingLead(
-            category="Network Hunting",
-            lead_title="Outbound HTTP Requests for Fake Icon Files",
-            artifact_or_behavior="GET requests for .ico files that result in executable MIME types or PE headers (MZ/PE).",
-            detection_guidance="Monitor proxy/firewall logs for outbound HTTP connections to 'ssl-6582datamanager.helpdeskbros.local' or URI '/favicon.ico' initiated by non-browser binaries.",
-        ),
-        HuntingLead(
-            category="Endpoint / File System",
-            lead_title="Executable Drop into Public Documents",
-            artifact_or_behavior="File writes into 'C:\\Users\\Public\\Documents\\' with double extensions or unusual naming.",
-            detection_guidance="Query EDR for file creation events matching 'C:\\Users\\Public\\Documents\\*.exe' where the creating process is an unverified user binary.",
-        ),
-        HuntingLead(
-            category="Process & Command-Line",
-            lead_title="Ping Delay Followed by Del Self-Deletion",
-            artifact_or_behavior="Process creation of 'cmd.exe' with command line containing 'ping 1.1.1.1' and 'Del /f /q'.",
-            detection_guidance="Audit command-line logs (Sysmon Event ID 1 / Windows 4688) for 'cmd.exe /C ping 1.1.1.1 -n 1 -w 3000 > Nul & Del'.",
-        ),
-        HuntingLead(
-            category="Host Execution",
-            lead_title="Shell Execution with Pipelined Command String",
-            artifact_or_behavior="Process spawning through ShellExecuteW executing staged binaries.",
-            detection_guidance="Monitor parent-child process relationships where a downloader binary spawns cmd.exe or executes binaries directly out of C:\\Users\\Public.",
-        ),
-    ]
+) -> list[AttackMappingDetail]:
+    mappings: list[AttackMappingDetail] = []
+    function_refs = [_function_ref(fn) for fn in functions[:3]]
+    if any("Network" in stage.stage_name for stage in chain):
+        mappings.append(
+            AttackMappingDetail(
+                tactic="Command and Control",
+                technique="Application Layer Protocol: Web Protocols",
+                technique_id="T1071.001",
+                observed_behavior="Uses web or networking APIs/artifacts for external communication.",
+                evidence=_first_evidence(indicators, IOCType.NETWORK_IOC) or _api_evidence(functions, NETWORK_APIS),
+                functions=function_refs,
+                confidence_label="MEDIUM",
+            )
+        )
+        if any(item.ioc_type == IOCType.HOST_IOC for item in indicators):
+            mappings.append(
+                AttackMappingDetail(
+                    tactic="Command and Control",
+                    technique="Ingress Tool Transfer",
+                    technique_id="T1105",
+                    observed_behavior="Network retrieval is associated with host staging artifacts.",
+                    evidence=f"{_first_evidence(indicators, IOCType.NETWORK_IOC)}; {_first_evidence(indicators, IOCType.HOST_IOC)}",
+                    functions=function_refs,
+                    confidence_label="MEDIUM",
+                )
+            )
+    if any("Execution" in stage.stage_name for stage in chain):
+        mappings.append(
+            AttackMappingDetail(
+                tactic="Execution",
+                technique="Native API",
+                technique_id="T1106",
+                observed_behavior="Invokes process or shell execution APIs.",
+                evidence=_api_evidence(functions, PROCESS_APIS),
+                functions=function_refs,
+                confidence_label="MEDIUM",
+            )
+        )
+    if any("Timing" in stage.stage_name for stage in chain):
+        mappings.append(
+            AttackMappingDetail(
+                tactic="Defense Evasion",
+                technique="Virtualization/Sandbox Evasion: Time Based Evasion",
+                technique_id="T1497.003",
+                observed_behavior="Contains delay or timing behavior.",
+                evidence=_api_evidence(functions, TIMING_APIS),
+                functions=function_refs,
+                confidence_label="MEDIUM",
+            )
+        )
+    if any("Cleanup" in stage.stage_name for stage in chain):
+        mappings.append(
+            AttackMappingDetail(
+                tactic="Defense Evasion",
+                technique="Indicator Removal: File Deletion",
+                technique_id="T1070.004",
+                observed_behavior="Contains file-deletion or cleanup command evidence.",
+                evidence=_first_evidence(indicators, IOCType.COMMAND_LINE_ARTIFACT),
+                functions=function_refs,
+                confidence_label="MEDIUM",
+            )
+        )
+    return [mapping for mapping in mappings if mapping.evidence]
 
 
-def _build_yara_rule(
-    profile: SampleProfile,
-    indicators: list[IOCItem],
-    artifact_rows: list[dict],
-) -> YaraRuleModel:
-    rule_name = f"Downloader_Win32_{profile.filename.replace('.', '_').replace('-', '_')}"
-    clean_rule_name = re.sub(r"[^a-zA-Z0-9_]", "_", rule_name)
+def _build_hunting_leads(indicators: list[IOCItem], chain: list[ExecutionChainStage]) -> list[HuntingLead]:
+    leads: list[HuntingLead] = []
+    if any(item.ioc_type == IOCType.NETWORK_IOC for item in indicators):
+        leads.append(HuntingLead(category="Network", lead_title="Observed Network Artifacts", artifact_or_behavior=_first_evidence(indicators, IOCType.NETWORK_IOC), detection_guidance="Hunt proxy, DNS, and EDR network telemetry for the observed endpoint and nearby variants."))
+    if any(item.ioc_type == IOCType.HOST_IOC for item in indicators):
+        leads.append(HuntingLead(category="Endpoint", lead_title="Observed Host Artifacts", artifact_or_behavior=_first_evidence(indicators, IOCType.HOST_IOC), detection_guidance="Hunt file-create, file-write, and process ancestry telemetry around this path or naming pattern."))
+    if any("Execution" in stage.stage_name for stage in chain):
+        leads.append(HuntingLead(category="Process", lead_title="Process Launch Behavior", artifact_or_behavior="Process or command execution APIs were observed.", detection_guidance="Review process creation telemetry for child processes launched by the analyzed binary."))
+    return leads
 
-    rule_text = f"""rule {clean_rule_name}
+
+def _build_yara_rule(profile: SampleProfile, indicators: list[IOCItem]) -> YaraRuleModel | None:
+    strings = [item.value for item in indicators if item.ioc_type in {IOCType.NETWORK_IOC, IOCType.HOST_IOC, IOCType.BUILD_ARTIFACT, IOCType.COMMAND_LINE_ARTIFACT}]
+    strings = [item for item in dict.fromkeys(strings) if len(item) >= 8][:8]
+    if not strings:
+        return None
+    rule_name = re.sub(r"[^A-Za-z0-9_]", "_", f"REAI_{profile.filename}")[:80]
+    string_lines = "\n".join(f'        $s{i} = "{_escape_yara(value)}" ascii wide nocase' for i, value in enumerate(strings, 1))
+    rule_text = f"""rule {rule_name}
 {{
     meta:
-        description = "Detects Downloader.exe_ malware staging strings and artifacts"
-        author = "REAI Threat Intelligence Engine V2"
-        date = "{profile.analysis_timestamp.split('T')[0]}"
+        description = "REAI evidence-backed strings for analyst review"
         sample_sha256 = "{profile.sha256}"
-        sample_md5 = "{profile.md5}"
         status = "ANALYST REVIEW REQUIRED"
-        tlp = "CLEAR"
 
     strings:
-        $del_cmd = "cmd.exe /C ping 1.1.1.1 -n 1 -w 3000 > Nul & Del /f /q" ascii wide nocase
-        $staged_path = "C:\\\\Users\\\\Public\\\\Documents\\\\CR433101.dat.exe" ascii wide nocase
-        $c2_url = "http://ssl-6582datamanager.helpdeskbros.local/favicon.ico" ascii wide nocase
-        $pdb_path = "PMAT-maldev\\\\src\\\\DownloadFromURL" ascii nocase
+{string_lines}
 
     condition:
-        uint16(0) == 0x5A4D and filesize < 50KB and (
-            $del_cmd or
-            $staged_path or
-            $c2_url or
-            $pdb_path
-        )
+        uint16(0) == 0x5A4D and any of them
 }}"""
-    return YaraRuleModel(
-        rule_name=clean_rule_name,
-        status="ANALYST REVIEW REQUIRED",
-        rule_text=rule_text,
-        rationale=(
-            "Strings were filtered to isolate high-specificity stager commands, targeted drop paths, "
-            "and build identifiers while excluding generic Windows API names and runtime library strings."
-        ),
-    )
+    return YaraRuleModel(rule_name=rule_name, rule_text=rule_text, rationale="Rule is based only on validated static artifacts and requires analyst tuning against cleanware and malware corpora.")
 
 
 def _build_analytical_gaps(
-    key_functions: list[KeyFunctionCard],
-    artifact_rows: list[dict],
-    contradiction_rows: list[dict],
+    functions: list[KeyFunctionCard],
+    indicators: list[IOCItem],
+    contradictions: list[dict],
+    question_rows: list[dict],
+    chain: list[ExecutionChainStage],
 ) -> list[AnalyticalGap]:
-    return [
-        AnalyticalGap(
-            title="Secondary Payload Contents",
-            description="The binary payload downloaded from the remote endpoint was not present in the static sample.",
-            known_evidence="Staging path C:\\Users\\Public\\Documents\\CR433101.dat.exe identified.",
-            missing_evidence="Payload binary bytes, capability profile, and C2 infrastructure of the secondary stage.",
-            recommended_action="Attempt network acquisition of http://ssl-6582datamanager.helpdeskbros.local/favicon.ico or perform memory dump in sandbox.",
-        ),
-        AnalyticalGap(
-            title="Live Infrastructure Status",
-            description="Static analysis cannot determine whether the remote endpoints are currently active.",
-            known_evidence="URLs referenced: http://ssl-6582datamanager.helpdeskbros.local and http://huskyhacks.dev.",
-            missing_evidence="DNS resolution records, current IP hosting telemetry, and HTTP server response codes.",
-            recommended_action="Query DNS threat intelligence and passive DNS (pDNS) repositories for current host resolution.",
-        ),
-        AnalyticalGap(
-            title="Delivery Mechanism & Initial Access",
-            description="The delivery vector used to drop Downloader.exe_ onto target systems is not evident within the standalone binary.",
-            known_evidence="Standalone 32-bit PE executable.",
-            missing_evidence="Phishing lure, parent exploit document, or secondary dropper telemetry.",
-            recommended_action="Inspect initial incident response telemetry (email gateways, macro logs, web downloads) for parent process.",
-        ),
-    ]
+    gaps: list[AnalyticalGap] = []
+    for row in contradictions:
+        gaps.append(
+            AnalyticalGap(
+                title=f"Unresolved contradiction: {row.get('severity', 'UNKNOWN')}",
+                description=str(row.get("description") or "Contradictory evidence remains unresolved."),
+                known_evidence=str(row.get("evidence_json") or ""),
+                missing_evidence=str(row.get("resolution") or "Analyst review is required."),
+                recommended_action="Review the conflicting function evidence in IDA.",
+            )
+        )
+    for row in question_rows:
+        if len(gaps) >= 8:
+            break
+        gaps.append(
+            AnalyticalGap(
+                title=f"Unresolved investigation question: {row.get('reason')}",
+                description=str(row.get("question") or "Investigation question remains unresolved."),
+                known_evidence=str(row.get("answer") or "No complete answer recorded."),
+                missing_evidence="Additional IDA/MCP evidence is needed to resolve this question.",
+                recommended_action=f"Review `{row.get('function_address')}` and rerun targeted investigation if needed.",
+            )
+        )
+    for fn in functions:
+        if fn.confidence_label == "LOW" and len(gaps) < 6:
+            gaps.append(
+                AnalyticalGap(
+                    title=f"Low-confidence function: {fn.display_name}",
+                    description=fn.summary,
+                    known_evidence=", ".join(fn.key_apis + fn.artifacts) or "Limited static evidence.",
+                    missing_evidence="Additional caller/callee, xref, or pseudocode context.",
+                    recommended_action=f"Investigate `{fn.address}` with targeted IDA review.",
+                )
+            )
+    if any(item.ioc_type == IOCType.NETWORK_IOC for item in indicators) and not any(item.ioc_type == IOCType.HOST_IOC for item in indicators):
+        gaps.append(
+            AnalyticalGap(
+                title="Network Response Handling",
+                description="Network artifacts are present, but no validated staged output path was recovered.",
+                known_evidence=_first_evidence(indicators, IOCType.NETWORK_IOC),
+                missing_evidence="Destination buffer, file path, or consumer of the network response.",
+                recommended_action="Inspect xrefs and callers/callees around the network routine.",
+            )
+        )
+    if not chain:
+        gaps.append(
+            AnalyticalGap(
+                title="Behavioral Execution Flow",
+                description="A semantic execution flow could not be constructed from the current validated evidence.",
+                known_evidence="Validated function findings exist without enough behavior linkage.",
+                missing_evidence="Call relationships, APIs, artifacts, or MCP evidence connecting functions to behavior.",
+                recommended_action="Run targeted investigation for the highest-importance unresolved functions.",
+            )
+        )
+    return gaps[:8]
 
 
 def _build_appendix(
-    workspace: WorkspacePaths,
     runtime_helpers: list[dict[str, Any]],
-    func_rows: list[dict],
+    functions: list[dict],
     applied_names: dict[str, tuple[str, str]],
     source_fingerprint: str | None,
     enrichment_fingerprint: str | None,
 ) -> AppendixModel:
-    all_funcs = []
-    for r in func_rows:
-        addr = r["address"]
-        orig = r.get("original_name") or f"sub_{addr}"
-        app, status = applied_names.get(addr, (r.get("proposed_name") or orig, "UNMODIFIED"))
-        all_funcs.append({
-            "address": addr,
-            "original_name": orig,
-            "applied_name": app,
-            "summary": r.get("summary") or "",
-            "confidence": float(r.get("confidence") or 0.8),
-            "idb_status": status,
-        })
-
+    full_functions = []
+    for row in functions:
+        address = str(row["address"])
+        original = str(row.get("original_name") or f"sub_{address}")
+        applied, status = applied_names.get(address, (row.get("proposed_name") or original, "UNMODIFIED"))
+        full_functions.append(
+            {
+                "address": address,
+                "original_name": original,
+                "applied_name": applied,
+                "summary": row.get("summary") or "",
+                "confidence": float(row.get("confidence") or 0.0),
+                "idb_status": status,
+            }
+        )
     return AppendixModel(
-        companion_idb="IDB Files/analyzed.i64",
         runtime_helpers=runtime_helpers,
-        full_functions=all_funcs,
-        report_schema="report-engine-v2",
+        full_functions=full_functions,
         source_analysis_fingerprint=source_fingerprint,
         enrichment_fingerprint=enrichment_fingerprint,
     )
+
+
+def _stage(
+    name: str,
+    description: str,
+    fn: KeyFunctionCard | None,
+    artifacts: list[dict] | None = None,
+    artifact_types: set[str] | None = None,
+) -> ExecutionChainStage:
+    stage_artifacts = []
+    if artifacts and artifact_types:
+        stage_artifacts = [
+            _artifact_display_value(a)
+            for a in artifacts
+            if _artifact_type(a) in artifact_types and _is_behavioral_artifact(a)
+        ][:4]
+    return ExecutionChainStage(
+        step_number=0,
+        stage_name=name,
+        description=description,
+        apis=_stage_apis(name, fn),
+        artifacts=stage_artifacts,
+        functions=[_function_ref(fn)] if fn else [],
+    )
+
+
+def _stage_apis(stage_name: str, fn: KeyFunctionCard | None) -> list[str]:
+    if fn is None:
+        return []
+    lowered = stage_name.lower()
+    if "network" in lowered:
+        terms = NETWORK_APIS
+    elif "execution" in lowered or "command" in lowered:
+        terms = PROCESS_APIS
+    elif "payload" in lowered or "file" in lowered or "cleanup" in lowered:
+        terms = FILE_APIS + PROCESS_APIS
+    elif "timing" in lowered or "anti-analysis" in lowered:
+        terms = TIMING_APIS
+    else:
+        terms = ()
+    matching = [api for api in fn.key_apis if _has_any(api.lower(), terms)] if terms else []
+    return (matching or fn.key_apis)[:4]
+
+
+def _narrative_for_stage(stage: ExecutionChainStage, indicators: list[IOCItem]) -> str:
+    support = []
+    if stage.functions:
+        support.append(f"implemented by {', '.join(f'`{fn}`' for fn in stage.functions)}")
+    if stage.apis:
+        support.append(f"with API evidence including {', '.join(f'`{api}`' for api in stage.apis[:4])}")
+    if stage.artifacts:
+        support.append(f"and artifact evidence {', '.join(f'`{artifact}`' for artifact in stage.artifacts[:3])}")
+    suffix = "; ".join(support)
+    return f"{stage.description} This section is evidence-backed {suffix}." if suffix else stage.description
+
+
+def _derive_function_role(row: dict[str, Any], name: str, apis: list[str], artifacts: list[str]) -> str:
+    text = _function_text(row, name, apis, artifacts)
+    if _looks_like_entry(str(row.get("original_name") or ""), name):
+        return "Primary orchestration or entry-point logic"
+    if _has_any(text, NETWORK_APIS):
+        return "Network communication or payload retrieval"
+    if _has_any(text, PROCESS_APIS):
+        return "Process, shell, or module execution"
+    if _has_any(text, FILE_APIS):
+        return "File-system interaction"
+    if _has_any(text, TIMING_APIS):
+        return "Timing or delay behavior"
+    return "Supporting binary logic"
+
+
+def _should_surface_key_function(card: KeyFunctionCard) -> bool:
+    if card.importance_label in {"CRITICAL", "HIGH"}:
+        return True
+    if card.importance_score >= 0.30 and card.role != "Supporting binary logic":
+        return True
+    if any(term in _card_text(card) for term in ("download", "network", "payload", "process", "command", "file deletion", "timing", "sleep")):
+        return card.importance_score >= 0.25 or card.role != "Supporting binary logic"
+    return False
+
+
+def _derive_behaviors(row: dict[str, Any], apis: list[str], artifacts: list[str]) -> list[str]:
+    behaviors = [str(item) for item in row.get("behavior") or []]
+    text = _function_text(row, "", apis, artifacts)
+    if _has_any(text, NETWORK_APIS):
+        behaviors.append("Uses network-related API or artifact evidence")
+    if _has_any(text, PROCESS_APIS):
+        behaviors.append("Launches or prepares process/module execution")
+    if _has_any(text, FILE_APIS):
+        behaviors.append("Interacts with the file system")
+    if _has_any(text, TIMING_APIS):
+        behaviors.append("Performs timing or delay operations")
+    if artifacts:
+        behaviors.append("References validated static artifacts")
+    return list(dict.fromkeys(behaviors)) or ["Validated supporting logic"]
+
+
+def _indicator_type_and_role(raw_type: str, role: str, value: str) -> tuple[str, str]:
+    if raw_type in {"url", "domain", "ip"}:
+        if "huskyhacks.dev" in value.lower() or role in {"context", "developer_context", "build_artifact"}:
+            return IOCType.CONTEXTUAL_ARTIFACT, "Contextual developer or training reference"
+        if "favicon" in value.lower() or "download" in role or "payload" in role:
+            return IOCType.NETWORK_IOC, "Network retrieval target"
+        return IOCType.NETWORK_IOC, "Embedded network endpoint"
+    if raw_type in {"file_path", "registry_path"}:
+        return IOCType.HOST_IOC, "Host artifact" if role != "dropped_payload" else "Staged or dropped payload path"
+    if raw_type == "pdb_path" or value.lower().endswith(".pdb") or role == "build_artifact":
+        return IOCType.BUILD_ARTIFACT, "Build or development artifact"
+    if raw_type == "command_line" or "cmd.exe" in value.lower() or "powershell" in value.lower():
+        return IOCType.COMMAND_LINE_ARTIFACT, "Command-line artifact"
+    return IOCType.CONTEXTUAL_ARTIFACT, "Contextual static artifact"
+
+
+def _sample_role(functions: list[dict], artifacts: list[dict]) -> str:
+    text = " ".join(_function_text(fn, "", [], []) for fn in functions)
+    has_network = _has_network(functions, artifacts)
+    has_host_stage = any(_artifact_role(artifact) == "dropped_payload" for artifact in artifacts)
+    has_exec = _has_any(text, PROCESS_APIS) or any(_artifact_type(artifact) == "command_line" for artifact in artifacts)
+    if has_network and has_host_stage and has_exec:
+        return "Downloader / Stager"
+    if has_network and has_host_stage:
+        return "Downloader"
+    if has_network:
+        return "Network-enabled Windows sample"
+    if has_exec:
+        return "Execution-capable Windows sample"
+    return "Windows executable"
+
+
+def _primary_objective(functions: list[dict], artifacts: list[dict]) -> str:
+    role = _sample_role(functions, artifacts)
+    if role == "Downloader / Stager":
+        return "Retrieve, stage, and execute secondary content"
+    if role == "Downloader":
+        return "Retrieve external content"
+    if role == "Network-enabled Windows sample":
+        return "Communicate with external network resources"
+    return "Not established from current static evidence"
+
+
+def _network_protocol(functions: list[dict], artifacts: list[dict]) -> str:
+    values = " ".join(str(a.get("original_value") or "").lower() for a in artifacts)
+    text = " ".join(_function_text(fn, "", [], []) for fn in functions)
+    if "https://" in values:
+        return "HTTPS"
+    if "http://" in values or "wininet" in text or "internet" in text or "urldownload" in text:
+        return "HTTP / WinINet"
+    if "winhttp" in text:
+        return "HTTP / WinHTTP"
+    if any(term in text for term in ("socket", "connect", "recv", "send")):
+        return "Socket-based network communication"
+    return "Not established"
+
+
+def _has_network(functions: list[dict], artifacts: list[dict]) -> bool:
+    return any(_artifact_type(a) in {"url", "domain", "ip"} for a in artifacts) or _text_has(functions, NETWORK_APIS)
+
+
+def _has_timing(functions: list[dict]) -> bool:
+    return _text_has(functions, TIMING_APIS)
+
+
+def _text_has(functions: list[dict], terms: tuple[str, ...]) -> bool:
+    return any(_has_any(_function_text(fn, "", [], []), terms) for fn in functions)
+
+
+def _function_text(row: dict[str, Any], name: str, apis: list[str], artifacts: list[str]) -> str:
+    return " ".join(
+        [
+            str(row.get("original_name") or ""),
+            str(row.get("proposed_name") or ""),
+            str(name),
+            str(row.get("summary") or ""),
+            " ".join(str(item) for item in row.get("capabilities") or []),
+            " ".join(str(item) for item in row.get("behavior") or []),
+            " ".join(str(item.get("description") or item.get("value") or "") for item in row.get("evidence") or [] if isinstance(item, dict)),
+            " ".join(apis),
+            " ".join(artifacts),
+        ]
+    ).lower()
+
+
+def _card_text(card: KeyFunctionCard) -> str:
+    return " ".join([card.display_name, card.summary, card.role, " ".join(card.behaviors), " ".join(card.key_apis), " ".join(card.artifacts)]).lower()
+
+
+def _has_any(text: str, terms: tuple[str, ...]) -> bool:
+    return any(term in text for term in terms)
+
+
+def _looks_like_entry(original: str, display: str) -> bool:
+    value = f"{original} {display}".lower()
+    return "_main" in value or value == "main" or "winmain" in value or "entry" in value
+
+
+def _is_runtime_helper(original: str, display: str, text: str) -> bool:
+    name = f"{original} {display}".lower()
+    return any(term in name for term in CRT_RUNTIME_NAMES) or any(stub == original.lower() or stub == display.lower() for stub in STUB_NAMES) or "compiler helper" in text
+
+
+def _function_ref(function: KeyFunctionCard) -> str:
+    return f"{function.display_name} ({function.address})"
+
+
+def _function_for_artifacts(functions: list[KeyFunctionCard], artifacts: list[dict], artifact_types: set[str]) -> KeyFunctionCard | None:
+    addresses = {str(a.get("function_address")) for a in artifacts if _artifact_type(a) in artifact_types and a.get("function_address")}
+    return next((fn for fn in functions if fn.address in addresses), None)
+
+
+def _best_stage_function(
+    functions: list[KeyFunctionCard],
+    *,
+    role_terms: tuple[str, ...],
+    text_terms: tuple[str, ...],
+) -> KeyFunctionCard | None:
+    for fn in functions:
+        if any(term in fn.role.lower() for term in role_terms):
+            return fn
+    return next((fn for fn in functions if _has_any(_card_text(fn), text_terms)), None)
+
+
+def _artifact_type(artifact: dict[str, Any]) -> str:
+    return str(artifact.get("artifact_type") or "").lower()
+
+
+def _artifact_role(artifact: dict[str, Any]) -> str:
+    return str(artifact.get("role") or "").lower()
+
+
+def _artifact_display_value(artifact: dict[str, Any]) -> str:
+    value = str(artifact.get("original_value") or "")
+    return _compact_evidence_value(value)
+
+
+def _is_behavioral_artifact(artifact: dict[str, Any]) -> bool:
+    value = _artifact_display_value(artifact)
+    raw_type = _artifact_type(artifact)
+    role = _artifact_role(artifact)
+    ioc_type, _ = _indicator_type_and_role(raw_type, role, value)
+    return ioc_type != IOCType.CONTEXTUAL_ARTIFACT
+
+
+def _is_reportable_artifact(artifact: dict[str, Any]) -> bool:
+    return _is_reportable_value(str(artifact.get("original_value") or ""), _artifact_type(artifact))
+
+
+def _is_reportable_value(value: str, artifact_type: str = "") -> bool:
+    if not value:
+        return False
+    lowered = value.lower()
+    has_line_breaks = "\n" in value or "\\n" in value
+    if has_line_breaks and any(marker in lowered for marker in ("int __cdecl", "void __", "{", "struct ", "byref")):
+        return False
+    if len(value) > 500 and artifact_type in {"command_line", "context", "unknown", ""}:
+        return False
+    return True
+
+
+def _compact_evidence_value(value: str, limit: int = 220) -> str:
+    clean = " ".join(value.replace("\r", " ").replace("\n", " ").split())
+    if len(clean) <= limit:
+        return clean
+    return clean[: limit - 3].rstrip() + "..."
+
+
+def _evidence_source(artifact: dict[str, Any]) -> str:
+    try:
+        evidence = json.loads(artifact.get("evidence_json") or "[]")
+    except ValueError:
+        evidence = []
+    sources = [str(item.get("source")) for item in evidence if isinstance(item, dict) and item.get("source")]
+    return ", ".join(dict.fromkeys(sources)) or "VALIDATED_ANALYSIS"
+
+
+def _first_evidence(indicators: list[IOCItem], ioc_type: str) -> str:
+    return next((item.display_value for item in indicators if item.ioc_type == ioc_type), "")
+
+
+def _api_evidence(functions: list[KeyFunctionCard], terms: tuple[str, ...]) -> str:
+    for fn in functions:
+        matching = [api for api in fn.key_apis if _has_any(api.lower(), terms)]
+        if matching:
+            return f"{_function_ref(fn)}: {', '.join(matching[:4])}"
+    return ""
+
+
+def _aggregate_confidence_label(values: list[float]) -> str:
+    if not values:
+        return "LOW"
+    avg = sum(values) / len(values)
+    return _confidence_label(avg)
+
+
+def _confidence_label(value: float) -> str:
+    return "HIGH" if value >= 0.85 else "MEDIUM" if value >= 0.65 else "LOW"
+
+
+def _as_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _slug(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_") or "section"
+
+
+def _escape_yara(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')

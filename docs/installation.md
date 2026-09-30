@@ -32,16 +32,21 @@ Real analysis requires IDA. REAI discovers IDA in this order:
 
 ## AI Setup
 
-The default provider is disabled. For OpenAI:
+Configure one provider:
 
 ```toml
+[ida]
+path = "C:/Program Files/IDA Professional 9.3"
+
 [ai]
 provider = "openai"
 model = "gpt-4o-mini"
 api-key = ""
 ```
 
-Use a real key only in a private local config file, or leave `api-key` empty and set `OPENAI_API_KEY` for the OpenAI SDK.
+Supported providers are `openai`, `anthropic`, `openai-compatible`, `lmstudio`, `ollama`, and `hermes`.
+
+Use a real key only in a private local config file, or leave `api-key` empty and set the provider environment variable such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
 
 ## Verification
 

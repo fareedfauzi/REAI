@@ -12,12 +12,16 @@ from reai.mcp.export import export_mcp_artifacts
 from reai.mcp.normalize import normalize_mcp_result
 from reai.mcp.planner import InvestigationPlanner
 from reai.mcp.schemas import (
+    AnalyticalImportance,
+    InvestigationQuestion,
+    InvestigationReason,
     MCPCallStatus,
     MCPEvidence,
     MCPInvestigationStats,
     InvestigationOutcome,
     InvestigationStatus,
     InvestigationTarget,
+    QuestionStatus,
 )
 from reai.storage.repository import AnalysisRepository
 from reai.utils.paths import WorkspacePaths
@@ -31,24 +35,26 @@ class MCPInvestigator:
         self.planner = InvestigationPlanner()
 
     def run(self, sample_id: str) -> MCPInvestigationStats | None:
-        client = create_mcp_client(self.config)
+        sample = self.repository.get_sample(sample_id)
+        client = create_mcp_client(self.config, workspace=self.workspace, sample=sample)
         if client is None:
             return None
 
         targets = self.repository.list_mcp_targets(sample_id, max_functions=self.config.max_functions)
-        if not targets:
-            stats = self.repository.calculate_mcp_stats(sample_id, candidate_count=0)
-            export_mcp_artifacts(self.repository, sample_id, self.workspace, stats)
-            return stats
-
         session = ReadOnlyMCPSession(
             client,
             allowlist=self.config.allowlist,
             timeout_seconds=self.config.timeout_seconds,
         )
+        session_id: str | None = None
         try:
             session.connect()
+            metadata = session.session_metadata()
+            session_id = metadata.session_id
+            self.repository.start_mcp_session(sample_id, metadata, status="RUNNING")
         except Exception:
+            if self.config.failure_policy == "fail":
+                raise MCPError("Core MCP session could not be started. Use --no-mcp or [mcp].failure_policy = 'degraded' for bulk-only analysis.")
             for target in targets:
                 self.repository.start_mcp_investigation(target)
                 self.repository.complete_mcp_investigation(
@@ -64,6 +70,10 @@ class MCPInvestigator:
             return stats
 
         try:
+            if not targets:
+                stats = self.repository.calculate_mcp_stats(sample_id, candidate_count=0)
+                export_mcp_artifacts(self.repository, sample_id, self.workspace, stats)
+                return stats
             for target in targets:
                 existing = self.repository.get_mcp_investigation(sample_id, target.address)
                 if existing and existing["status"] == InvestigationStatus.COMPLETED.value:
@@ -72,6 +82,8 @@ class MCPInvestigator:
                     break
                 self._investigate_target(sample_id, target, session)
         finally:
+            if session_id is not None:
+                self.repository.complete_mcp_session(session_id, status="COMPLETED")
             session.close()
 
         stats = self.repository.calculate_mcp_stats(sample_id, candidate_count=len(targets))
@@ -91,6 +103,7 @@ class MCPInvestigator:
         initial_proposed = target.proposed_name
         current_confidence = target.confidence
         current_unknowns = list(target.unknowns)
+        self._persist_target_questions(target)
         outcome = InvestigationOutcome.UNRESOLVED
 
         for _ in range(self.config.max_rounds_per_function):
@@ -125,6 +138,14 @@ class MCPInvestigator:
                 unknowns_before=current_unknowns,
             )
             new_evidence: list[MCPEvidence] = []
+            active_question = target.investigation_questions[0] if target.investigation_questions else None
+            if active_question:
+                self.repository.update_mcp_question_status(
+                    sample_id,
+                    target.address,
+                    active_question,
+                    status=QuestionStatus.INVESTIGATING,
+                )
             for action in plan.actions:
                 fingerprint = action.fingerprint()
                 if fingerprint in completed:
@@ -163,6 +184,15 @@ class MCPInvestigator:
                         new_evidence.append(evidence)
 
             if new_evidence:
+                if active_question:
+                    self.repository.update_mcp_question_status(
+                        sample_id,
+                        target.address,
+                        active_question,
+                        status=QuestionStatus.PARTIALLY_RESOLVED,
+                        answer=f"MCP returned {len(new_evidence)} new evidence item(s).",
+                        evidence=[item.model_dump(mode="json") for item in new_evidence[:5]],
+                    )
                 reassessed = self._reassess_with_mcp_evidence(
                     sample_id,
                     target,
@@ -180,6 +210,14 @@ class MCPInvestigator:
             self.repository.increment_mcp_rounds(sample_id, target.address)
 
             if not new_evidence:
+                if active_question:
+                    self.repository.update_mcp_question_status(
+                        sample_id,
+                        target.address,
+                        active_question,
+                        status=QuestionStatus.UNRESOLVED,
+                        answer="No new MCP evidence was produced before the stop condition.",
+                    )
                 outcome = InvestigationOutcome.NO_USEFUL_ACTION
                 break
             if current_confidence >= 0.85 and not current_unknowns:
@@ -212,6 +250,25 @@ class MCPInvestigator:
                 interpretation_changed=False,
                 error=f"Unable to retrieve final AI finding for {original_name}.",
             )
+
+    def _persist_target_questions(self, target: InvestigationTarget) -> None:
+        questions: list[InvestigationQuestion] = []
+        for index, question in enumerate(target.investigation_questions):
+            reason_value = target.investigation_reasons[index] if index < len(target.investigation_reasons) else "IMPORTANT_FUNCTION"
+            try:
+                reason = InvestigationReason(reason_value)
+            except ValueError:
+                reason = InvestigationReason.IMPORTANT_FUNCTION
+            questions.append(
+                InvestigationQuestion(
+                    sample_id=target.sample_id,
+                    function_address=target.address,
+                    question=question,
+                    reason=reason,
+                    priority=target.analytical_importance if target.analytical_importance != AnalyticalImportance.LOW else AnalyticalImportance.MEDIUM,
+                )
+            )
+        self.repository.upsert_mcp_questions(questions)
 
     def _reassess_with_mcp_evidence(
         self,
@@ -363,4 +420,3 @@ def _resolve_unknowns(unknowns: list[str], capabilities_with_evidence: set[str])
         if not resolved:
             remaining.append(unknown)
     return remaining
-

@@ -18,11 +18,11 @@ htmlcov/
 # Build artifacts
 build/
 dist/
-
 tests/
 
 # Workspace & run outputs
 .manual-phase1-*/
+.manual-mcp-smoke/
 reai-output/
 *.log
 
@@ -43,4 +43,3 @@ reai.toml
 # Editor & IDE files
 .vscode/
 .idea/
-

@@ -1,0 +1,1323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Malware Analysis Report: 0x100011F0</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+:root { --bg: #f8fafc; --text: #0f172a; --card: #ffffff; --accent: #4f46e5; --border: #e2e8f0; --muted: #64748b; }
+html { scroll-behavior: smooth; }
+body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; font-size: 14px; padding-bottom:100px; }
+.header { background: linear-gradient(135deg, #1e293b, #0f172a); color: white; padding: 20px 40px; position: sticky; top: 0; z-index: 1000; box-shadow: 0 4px 15px rgba(0,0,0,0.1); display: flex; align-items:center; justify-content: space-between; }
+.header h1 { font-size: 20px; font-weight: 700; margin-bottom:4px; }
+.content { max-width: 1250px; margin: 30px auto; padding: 0 20px; }
+.section { background: var(--card); border-radius: 12px; padding: 30px; margin-bottom: 25px; box-shadow: 0 2px 4px rgba(0,0,0,0.03); border: 1px solid var(--border); }
+.section-title { font-size: 20px; font-weight: 700; color: #1e293b; border-bottom: 2px solid #f1f5f9; padding-bottom: 12px; margin-bottom: 20px; }
+.ai-block { white-space: pre-wrap; color: #334155; line-height: 1.7; background:#fbfcfe; padding: 20px; border-left: 4px solid var(--accent); border-radius: 4px 8px 8px 4px; }
+.ai-block.code-like { font-family: 'JetBrains Mono', monospace; font-size: 13px; background:#0f172a; color:#e2e8f0; border-left-color:#60a5fa; }
+.data-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+.data-table th { position: sticky; top: 80px; text-align: left; padding: 12px 15px; background: #f1f5f9; color: #475569; font-weight: 600; }
+.data-table td { padding: 12px 15px; border-bottom: 1px solid #e2e8f0; vertical-align:top; }
+.data-table tr:hover { background-color: #f8fafc; }
+.sev-badge { padding:3px 10px; border-radius:12px; color:white; font-size:10px; font-weight:bold; }
+.muted { color: var(--muted); }
+.chain-box { padding:10px 15px; background:#f9fafb; border-left:4px solid; margin-bottom:8px; border-radius:4px; }
+pre { background:#1e1e1e; color:#d4d4d4; padding:15px; border-radius:8px; overflow-x:auto; font-size:12px; font-family:'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Courier New', monospace; }
+.str-details { background:#f1f5f9; margin-bottom:8px; border-radius:8px; overflow:hidden; }
+.str-details summary { padding:12px 15px; font-weight:600; cursor:pointer; background:#e2e8f0; }
+.str-content { padding:15px; max-height:300px; overflow-y:auto; font-family:'Fira Code', 'JetBrains Mono', monospace; font-size:12px; }
+.fn-card { background:#ffffff; border:1px solid #e2e8f0; border-radius:8px; padding:20px; margin-bottom:20px; box-shadow:0 1px 3px rgba(0,0,0,0.05); }
+.fn-card-title { font-family:'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace; font-size:16px; font-weight:600; color:#1e293b; margin-bottom:8px; border-bottom: 1px dotted #cbd5e1; padding-bottom:5px; }
+.fn-info-row { margin-top:8px; color:#334155; line-height:1.5; font-size:14px; }
+.fn-info-row b { color:#1e293b; font-weight:600; margin-right:5px; }
+.code-details { margin-top: 15px; background: #f8fafc; border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+.code-details summary { padding: 10px 15px; cursor:pointer; font-weight:600; background:#f1f5f9; border-bottom:1px solid var(--border); }
+.code-details pre { margin:0; border-radius:0; max-height:800px; overflow:auto; }
+#mermaid-container { position: relative; border: 1px solid var(--border); background: #fdfdfd; border-radius: 8px; overflow: hidden; height:600px; }
+#zoom-controls { position: absolute; top: 15px; right: 15px; z-index: 1000; display:flex; gap:8px; background:rgba(255,255,255,0.9); padding:5px; border-radius:8px; box-shadow:0 2px 10px rgba(0,0,0,0.1); }
+#zoom-controls button { background:white; border:1px solid #cbd5e1; padding:6px 12px; border-radius:5px; cursor:pointer; font-weight:600; font-size:12px; transition:0.2s; }
+#zoom-controls button:hover { background:#f1f5f9; }
+#mermaid-diagram { width: 100%; height: 100%; transform-origin: top left; transition: transform 0.2s ease; cursor: grab; }
+#mermaid-diagram:active { cursor: grabbing; }
+.mermaid .node { cursor: pointer !important; }
+.filter-input { width:100%; padding:12px 15px; font-size:14px; border:1px solid #cbd5e1; border-radius:8px; margin-bottom:20px; box-shadow:0 1px 3px rgba(0,0,0,0.05); }
+.ai-block.code-like { font-family: 'Fira Code', 'JetBrains Mono', monospace; font-size: 13px; background:#0f172a; color:#e2e8f0; border-left-color:#60a5fa; }
+/* Collapsible Code Sections (native details/summary) */
+.code-section { margin-top: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+.code-section-header { display: flex; align-items: center; gap: 8px; background: #f8fafc; padding: 7px 14px; cursor: pointer; font-weight: 700; font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 0.4px; user-select: none; list-style: none; transition: background 0.15s; }
+.code-section-header::-webkit-details-marker { display: none; }
+.code-section-header::marker { display: none; content: ''; }
+.code-section-header:hover { background: #f1f5f9; color: var(--accent); }
+.code-section-header svg { transition: transform 0.25s ease; flex-shrink: 0; }
+details.code-section[open] > .code-section-header svg { transform: rotate(0deg); }
+details.code-section:not([open]) > .code-section-header svg { transform: rotate(-90deg); }
+.code-section-body pre { margin: 0; border-radius: 0; max-height: 600px; border: none; }
+.toggle-icon { transition: transform 0.2s ease; display: block; fill: currentColor; }
+details[open] .toggle-icon { transform: rotate(90deg); }
+.icon-box { width: 16px; height: 16px; background: transparent; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>PseudoNote (Deep Analyzer): Static Code Analysis Report</h1>
+    <span style="font-size:12px; opacity:0.8; font-family:'JetBrains Mono',monospace;">Target Entry: 0x100011F0</span>
+  </div>
+  <div style="background:#f59e0b; color:white; padding:8px 25px; border-radius:25px; font-weight:800; font-size:16px;">
+    SUSPICIOUS
+  </div>
+</div>
+
+<div class="content">
+
+  
+        <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:12px; padding:25px; margin-bottom:25px; box-shadow:0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06); border-top: 5px solid #f59e0b;">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                <div style="flex:1;">
+                    <div style="font-size:11px; font-weight:800; color:#64748b; text-transform:uppercase; letter-spacing:1px; margin-bottom:8px;">Verdict & Risk Assessment</div>
+                    <h2 style="margin:0; color:#1e293b; font-size:26px; font-weight:800; letter-spacing:-0.5px;">Trojan</h2>
+                    <div style="margin-top:12px; color:#334155; font-size:15px; line-height:1.6;">
+                        <b style="color:#475569;">Risk Factor:</b> The binary exhibits strong indicators of code injection and persistence mechanisms through inline hooking and DllMain-based setup, classified as suspicious with high potential for malicious behavior.
+                    </div>
+                </div>
+                <div style="background:#f8fafc; border:1px solid #e2e8f0; padding:15px 25px; border-radius:12px; text-align:center; min-width:130px; margin-left:30px; box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.05);">
+                    <div style="font-size:32px; font-weight:900; color:#f59e0b; line-height:1;">85<span style="font-size:18px; color:#cbd5e1; font-weight:700;">/100</span></div>
+                    <div style="font-size:10px; font-weight:800; color:#64748b; text-transform:uppercase; margin-top:8px; letter-spacing:0.5px;">Security Risk</div>
+                </div>
+            </div>
+        </div>
+
+  <div style="background-color: #fffbeb; color: #b45309; padding: 15px 20px; border-left: 4px solid #f59e0b; border-radius: 6px; margin-bottom: 25px; font-size: 14px; line-height: 1.5; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+    <strong style="font-size: 15px;">⚠️ Analysis Warning</strong><br/>
+    This report may contain hallucinated LLM-generated content, especially in the <b>Executive Summary</b> and <b>Technical Overview</b> sections. Proceed to the detailed function analysis below to assist your reverse engineering activities and independently verify these findings.
+  </div>
+
+  <!-- Executive summary -->
+  <div class="section" id="sec-1">
+    <h2 class="section-title">Executive summary</h2>
+    <div class="ai-block" style="border-left-color:var(--accent); padding: 25px; line-height: 1.6;"><p style="margin:0 0 10px 0;">The analyzed binary demonstrates characteristics consistent with a code injection and persistence-oriented malware family. The primary malicious capability resides in the installation of inline hooks via the function <a href="#fn_10001020" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">fn_install_inline_call_hook</a>, which modifies function prologues during DLL_PROCESS_ATTACH to redirect execution flow. This technique enables the malware to intercept and alter system calls or application behavior without detection. The technical objective is to establish a foothold within a target process for further malicious activity. The core functions involved are <a href="#fn_100011F0" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">_DllMain@12</a>, which triggers the hook installation sequence, and <a href="#fn_10001020" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">fn_install_inline_call_hook</a>, which performs the actual modification of executable code. These functions work together to create a persistent mechanism that allows the malware to influence the runtime behavior of the host process upon attachment.</p><p style="margin:0 0 10px 0;">The second major capability involves process injection and behavioral modification through the <a href="#fn_10001000" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">fn_DllMain_wrapper</a> function. This component acts as an intermediary that redirects execution flow during DLL attachment, allowing for interception of critical system calls. The technical objective here is to maintain stealth while enabling manipulation of the target process&#x27;s operation. The specific function responsible for this behavior is <a href="#fn_10001000" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">fn_DllMain_wrapper</a>, which is invoked directly by <a href="#fn_100011F0" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">_DllMain@12</a>. Together with <a href="#fn_10001020" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">fn_install_inline_call_hook</a>, it forms a foundational infrastructure for code injection that can be leveraged to execute arbitrary code within the context of other processes.</p><p style="margin:0 0 10px 0;">A third significant capability manifests in the form of memory integrity checking and anti-debugging mechanisms embodied by <a href="#fn_1000892E" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">fn_validate_this_pointer</a>. This function performs a direct comparison between a &#x27;this&#x27; pointer and a global variable, triggering a guard page violation if they do not match. The technical objective is to detect tampering or debugging attempts that might interfere with the hooking mechanism. The specific implementation occurs within <a href="#fn_1000892E" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">fn_validate_this_pointer</a>, which uses structured exception reporting to enforce code integrity. This function serves as a defensive layer that protects the integrity of the inline hooking infrastructure, ensuring that modifications remain intact and functional throughout the malware&#x27;s lifecycle.</p><p style="margin:0 0 10px 0;">Based on the absence of explicit data exfiltration, privilege escalation, or direct destructive payloads, the binary appears to function as a dropper or loader component within a larger attack chain. It establishes persistence and injection capabilities but does not appear to contain active malicious payloads such as encryption routines or network communication modules. The overall attack narrative centers around establishing a foothold within a target process through inline hooking, followed by potential behavioral modification or data interception. The functions <a href="#fn_100011F0" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">_DllMain@12</a>, <a href="#fn_10001020" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">fn_install_inline_call_hook</a>, <a href="#fn_10001000" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">fn_DllMain_wrapper</a>, and <a href="#fn_1000892E" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">fn_validate_this_pointer</a> collectively represent a sophisticated approach to process manipulation and evasion, positioning this binary as a tool for initial access and stealthy infiltration rather than direct harm.</p></div>
+  </div>
+
+  <!-- Technical Code analysis overview -->
+  <div class="section" id="sec-2">
+    <h2 class="section-title">Technical Code analysis overview</h2>
+    <div class="ai-block" style="border-left-color:#3b82f6; padding: 25px; line-height: 1.7;"><p style="margin:0 0 10px 0;">The binary exhibits a sophisticated code injection and persistence mechanism rooted in inline hooking techniques executed during DLL_PROCESS_ATTACH. The core attack vector initiates at <a href="#fn_100011F0" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">_DllMain@12</a>, which serves as the primary entry point for the malicious DLL. From this location, the function <a href="#fn_10001020" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">fn_install_inline_call_hook</a> is invoked to establish reflective code loading and process injection capabilities. This hook installation process modifies function prologues to redirect execution to a custom wrapper, enabling stealthy interception of critical system behaviors. The subsequent function <a href="#fn_10001000" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">fn_DllMain_wrapper</a> acts as the dispatcher for these redirected calls, maintaining control flow while concealing malicious intent through obfuscation and abstraction layers. A secondary function, <a href="#fn_1000892E" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">fn_validate_this_pointer</a>, introduces integrity checks by validating object pointers against global state, potentially serving as an anti-tampering or anti-debugging mechanism. These functions collectively implement TTPs such as T1055 (Process Injection), T1547 (Boot or Logon Autostart), and T1620 (Reflective Code Loading). The implementation relies heavily on low-level memory manipulation and API-based hooking strategies, avoiding high-level abstractions that could expose malicious behavior. The absence of explicit exfiltration or encryption routines indicates that the payload&#x27;s primary purpose is to establish a foothold within the target process, facilitating further malicious activity through behavioral modification rather than direct data compromise. The design emphasizes evasion and persistence, leveraging Windows threading and memory management primitives to maintain covert operation without triggering standard detection mechanisms.</p></div>
+  </div>
+
+  <!-- Execution Flow Overview -->
+  <div class="section" id="sec-3">
+    <h2 class="section-title">Execution Flow Overview</h2>
+    <table class="data-table"><thead><tr><th>Phase</th><th>Execution Description</th></tr></thead><tbody><tr><td style="font-weight:bold; width:180px;">DLL Entry and Initialization</td><td class="muted">The program&#x27;s execution begins upon loading as a DLL, triggered by the <a href="#fn_100011F0" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">_DllMain@12</a> function at address 0x100011F0. This function is invoked during DLL_PROCESS_ATTACH and serves as the primary entry point for initializing the module. It immediately calls <a href="#fn_10001020" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">fn_install_inline_call_hook</a> (0x10001020), which sets up inline hooks to redirect execution flow of targeted functions. This initial setup is critical for enabling subsequent malicious behaviors by modifying how the host process executes core routines.</td></tr><tr><td style="font-weight:bold; width:180px;">Inline Hook Installation and Process Control</td><td class="muted">The <a href="#fn_10001020" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">fn_install_inline_call_hook</a> routine modifies the prologue bytes of specific functions to redirect their execution to custom wrapper functions such as <a href="#fn_10001000" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">fn_DllMain_wrapper</a> (0x10001000). This technique allows the DLL to intercept and alter system or application behavior without direct code injection. The installation of these hooks is performed early in the process lifecycle, ensuring that intercepted functions are modified before they are executed, thereby enabling persistent control over the host process.</td></tr><tr><td style="font-weight:bold; width:180px;">Execution Flow Redirection and Integrity Checks</td><td class="muted">Following hook installation, <a href="#fn_10001000" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">fn_DllMain_wrapper</a> acts as a proxy for the original DllMain logic, allowing the DLL to manage control flow while maintaining stealth. Concurrently, <a href="#fn_1000892E" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">fn_validate_this_pointer</a> (0x1000892E) performs integrity checks by comparing a &#x27;this&#x27; pointer against a global variable. If a mismatch is detected, it triggers a guard page violation using structured exception reporting (__report_gsfailure), indicating a defensive mechanism against tampering or debugging attempts. These checks ensure that hooked functions remain unaltered and maintain expected behavior.</td></tr><tr><td style="font-weight:bold; width:180px;">Persistence and Evasion Infrastructure Setup</td><td class="muted">Through the use of inline hooks and function redirection, the DLL establishes a foundation for persistence and evasion. The inline hooking mechanism allows the DLL to subtly influence the execution path of key system functions, making it harder to detect or analyze. Additionally, the presence of anti-debugging indicators in <a href="#fn_1000892E" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">fn_validate_this_pointer</a> reinforces the module’s capability to resist reverse engineering efforts, enhancing its resilience in hostile environments.</td></tr><tr><td style="font-weight:bold; width:180px;">Behavior Modification and System Interaction</td><td class="muted">With the inline hooks in place, the DLL gains the ability to monitor and manipulate how the host process interacts with system resources. By intercepting function calls, it can alter memory access patterns, API usage, or even redirect execution paths dynamically. This behavior modification capability supports advanced evasion tactics and enables the DLL to adapt its operation based on runtime conditions, potentially masking malicious activities under benign-looking system calls.</td></tr><tr><td style="font-weight:bold; width:180px;">Runtime Monitoring and Defensive Mechanisms</td><td class="muted">Throughout its operation, the DLL maintains internal consistency checks via <a href="#fn_1000892E" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">fn_validate_this_pointer</a>, which ensures that hooked functions behave correctly and haven&#x27;t been tampered with. This layer of integrity verification helps sustain long-term stability and effectiveness of the inline hook infrastructure. Combined with other defensive features like TLS management and critical section handling, this stage reinforces the module’s robustness against interference or premature termination.</td></tr><tr><td style="font-weight:bold; width:180px;">Termination and Cleanup</td><td class="muted">Upon process termination, the DLL cleans up its allocated resources, including freeing heaps, releasing TLS slots, and destroying critical sections. While no explicit malicious cleanup routines are present, the standard Windows CRT teardown procedures (e.g., HeapDestroy, LeaveCriticalSection) are invoked to ensure proper resource deallocation. This final phase ensures that the DLL leaves minimal traces behind, aligning with typical evasion practices in malware design.</td></tr></tbody></table>
+  </div>
+
+  <!-- Capability or Malware Features (Aggregated) -->
+  <div class="section" id="sec-4">
+    <h2 class="section-title">Capability or Malware Features</h2>
+
+    <div style="margin-bottom:30px;">
+        <h3 style="color:#1e293b; border-left:4px solid #cbd5e1; padding-left:10px; margin-bottom:15px;">1. General Identified Capabilities</h3>
+        <table class="data-table"><thead><tr><th>Capability</th><th>Description</th><th>Associated Functions</th></tr></thead><tbody><tr><td style="font-weight:bold; color:#1e293b; width:220px;">Process Injection</td><td class="muted">The ability to inject code into another process by installing inline hooks that redirect execution flow during DLL attachment.</td><td style="width:250px;"><code>_DllMain@12</code>, <code>fn_install_inline_call_hook</code>, <code>fn_DllMain_wrapper</code></td></tr><tr><td style="font-weight:bold; color:#1e293b; width:220px;">Persistence</td><td class="muted">Establishes persistence via DLL injection during process attachment, allowing the code to run in the context of other processes.</td><td style="width:250px;"><code>_DllMain@12</code>, <code>fn_install_inline_call_hook</code>, <code>fn_DllMain_wrapper</code></td></tr><tr><td style="font-weight:bold; color:#1e293b; width:220px;">Code Integrity Checking</td><td class="muted">Performs validation of &#x27;this&#x27; pointers to detect or prevent tampering with hooked functions, potentially used for anti-debugging or integrity verification.</td><td style="width:250px;"><code>fn_validate_this_pointer</code></td></tr></tbody></table>
+    </div>
+    
+    <div style="margin-bottom:30px;">
+        <h3 style="color:#1e293b; border-left:4px solid #cbd5e1; padding-left:10px; margin-bottom:15px;">2. C2, Backdoor or RAT Analysis</h3>
+        <p class="muted">No explicit C2/Backdoor mechanisms extracted.</p>
+    </div>
+
+    <div style="margin-bottom:30px;">
+        <h3 style="color:#1e293b; border-left:4px solid #cbd5e1; padding-left:10px; margin-bottom:15px;">3. Persistence Mechanisms</h3>
+        <div class="ai-block" style="border-left-color: #cbd5e1; margin-bottom:15px; padding:25px; line-height:1.6;"><b>Summary:</b> The analyzed binary employs DLL injection and process attachment mechanisms to establish persistence. During DLL_PROCESS_ATTACH, the function &#x27;<a href="#fn_10001020" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">fn_install_inline_call_hook</a>&#x27; modifies function prologues to redirect execution flow, enabling code injection. While no explicit registry keys, services, or task scheduler entries are directly observed, the inline hooking technique implies potential for runtime manipulation and stealthy persistence via injected code execution.</div><table class="data-table"><thead><tr><th>Persistence Method</th><th>Technical Details</th><th>Source Functions</th></tr></thead><tbody><tr><td style="font-weight:bold; width:180px;">DLL Injection via Inline Hooking</td><td>The binary installs inline hooks during DLL_PROCESS_ATTACH using &#x27;<a href="#fn_10001020" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">fn_install_inline_call_hook</a>&#x27;, which modifies function prologue bytes to redirect execution to wrapper functions. This allows the DLL to inject code into other processes and maintain persistence by altering their behavior at runtime.</td><td class="muted"><code>_DllMain@12</code>, <code>fn_install_inline_call_hook</code></td></tr></tbody></table>
+    </div>
+
+    <div style="margin-bottom:30px;">
+        <h3 style="color:#1e293b; border-left:4px solid #cbd5e1; padding-left:10px; margin-bottom:15px;">4. Reconnaissance or Info Stealer</h3>
+        <p class="muted">No specific info-stealing artifacts identified.</p>
+    </div>
+
+    <div style="margin-bottom:30px;">
+        <h3 style="color:#1e293b; border-left:4px solid #cbd5e1; padding-left:10px; margin-bottom:15px;">5. File, Registry or Process Interaction</h3>
+        <p class="muted">No direct OS object manipulation identified.</p>
+    </div>
+
+    <div style="margin-bottom:30px;">
+        <h3 style="color:#1e293b; border-left:4px solid #cbd5e1; padding-left:10px; margin-bottom:15px;">6. API Hashing, API Resolving or PEB Walk</h3>
+        <p class="muted">No indirect API resolving found.</p>
+    </div>
+
+    <div style="margin-bottom:30px;">
+        <h3 style="color:#1e293b; border-left:4px solid #cbd5e1; padding-left:10px; margin-bottom:15px;">7. Packer, Obfuscation or Anti-Analysis</h3>
+        <table class="data-table"><thead><tr><th>Anti-Analysis Technique</th><th>Technical Reasoning</th><th>Source Functions</th></tr></thead><tbody><tr><td style="font-weight:bold; width:200px;">Inline Hooking</td><td>The binary employs inline hooking techniques by modifying function prologue bytes to redirect execution flow to custom wrapper functions. This is evident in the call graph where <a href="#fn_100011F0" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">_DllMain@12</a> invokes <a href="#fn_10001020" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">fn_install_inline_call_hook</a>, which in turn sets up <a href="#fn_10001000" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">fn_DllMain_wrapper</a>. This technique is commonly used for code injection, behavior modification, and evasion.</td><td class="muted"><code>_DllMain@12</code>, <code>fn_install_inline_call_hook</code>, <code>fn_DllMain_wrapper</code></td></tr><tr><td style="font-weight:bold; width:200px;">Process Injection</td><td>The presence of inline hooking mechanisms and DLL entry point manipulation strongly suggests process injection capabilities. The installation of hooks during DLL_PROCESS_ATTACH allows the binary to intercept and alter execution flow of the host process, a hallmark of process injection techniques.</td><td class="muted"><code>_DllMain@12</code>, <code>fn_install_inline_call_hook</code>, <code>fn_DllMain_wrapper</code></td></tr><tr><td style="font-weight:bold; width:200px;">Defense Evasion</td><td>The function <a href="#fn_1000892E" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">fn_validate_this_pointer</a> performs a validation check between a &#x27;this&#x27; pointer and a global variable, potentially causing a guard page violation if they differ. This mechanism may serve as an integrity check or anti-debugging feature, indicating attempts to detect tampering or debugging activity.</td><td class="muted"><code>fn_validate_this_pointer</code></td></tr></tbody></table>
+    </div>
+
+    <div style="margin-bottom:30px;">
+        <h3 style="color:#1e293b; border-left:4px solid #cbd5e1; padding-left:10px; margin-bottom:15px;">8. Cryptographic, Hashing, Encoding or Compression Artifacts</h3>
+        <p class="muted">No cryptographic constants or algorithms detected.</p>
+    </div>
+  </div>
+
+  <!-- Suspicious Imports -->
+  <div class="section" id="sec-8">
+    <h2 class="section-title">Suspicious Imports</h2>
+    <table class="data-table"><thead><tr><th>API Name</th><th>Category</th><th>Associated Functions</th></tr></thead><tbody><tr><td><code>GetModuleHandleA</code></td><td>Dynamic_Resolution</td><td class="muted">fn_install_inline_call_hook</td></tr><tr><td><code>GetModuleHandleW</code></td><td>Loader_Resolution</td><td class="muted">fn_install_inline_call_hook</td></tr><tr><td><code>GetProcAddress</code></td><td>Dynamic_Resolution</td><td class="muted">fn_install_inline_call_hook</td></tr></tbody></table>
+  </div>
+
+  <!-- TTP Mapping (MITRE ATTACK) -->
+  <div class="section" id="sec-9">
+    <h2 class="section-title">TTP Mapping (MITRE ATTACK)</h2>
+    <table class="data-table"><thead><tr><th>Technique ID</th><th>Technique Name</th><th>Associated Functions</th></tr></thead><tbody><tr><td><a href="https://attack.mitre.org/techniques/T1036/" target="_blank"><b>T1036</b></a></td><td>Masquerading</td><td class="muted">fn_validate_this_pointer</td></tr><tr><td><a href="https://attack.mitre.org/techniques/T1053/" target="_blank"><b>T1053</b></a></td><td>Scheduled Task/Job</td><td class="muted">_DllMain@12, fn_DllMain_wrapper, fn_install_inline_call_hook</td></tr><tr><td><a href="https://attack.mitre.org/techniques/T1055/" target="_blank"><b>T1055</b></a></td><td>Process Injection</td><td class="muted">_DllMain@12, fn_DllMain_wrapper, fn_install_inline_call_hook, fn_validate_this_pointer</td></tr><tr><td><a href="https://attack.mitre.org/techniques/T1055/001" target="_blank"><b>T1055.001</b></a></td><td>DLL Injection</td><td class="muted">_DllMain@12, fn_DllMain_wrapper, fn_install_inline_call_hook</td></tr><tr><td><a href="https://attack.mitre.org/techniques/T1547/" target="_blank"><b>T1547</b></a></td><td>Boot or Logon Autostart</td><td class="muted">_DllMain@12, fn_DllMain_wrapper, fn_install_inline_call_hook</td></tr><tr><td><a href="https://attack.mitre.org/techniques/T1562/" target="_blank"><b>T1562</b></a></td><td>Impair Defenses</td><td class="muted">fn_validate_this_pointer</td></tr><tr><td><a href="https://attack.mitre.org/techniques/T1620/" target="_blank"><b>T1620</b></a></td><td>Reflective Code Loading</td><td class="muted">fn_validate_this_pointer</td></tr></tbody></table>
+  </div>
+
+  <!-- Indicator of Compromise -->
+  <div class="section" id="sec-10">
+    <h2 class="section-title">Indicator of Compromise</h2>
+    <p class="muted">No specific indicator signatures extracted.</p>
+  </div>
+
+  <!-- Strings analysis -->
+  <div class="section" id="sec-11">
+    <h2 class="section-title">Strings analysis</h2>
+    
+        <details class="fn-card" style="margin-top:0; border:1px solid #e2e8f0; box-shadow:none;">
+            <summary style="padding:15px; cursor:pointer; font-weight:600; color:#1e293b; background:#f8fafc; border-radius:8px; display:flex; align-items:center; gap:10px;">
+                <div class="icon-box"><svg class="toggle-icon" style="width:10px; height:10px;" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+                View Extracted Strings (80 artifacts found)
+            </summary>
+            <div style="padding:15px;">
+                <table class="data-table" style="box-shadow:none; border:none; margin-top:0;">
+                    <thead><tr><th>String Value</th><th style="width:260px;">Associated Functions</th></tr></thead>
+                    <tbody id="strings-tbody">
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">HH:mm:ss</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">runtime error </td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">TLOSS error
+</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">SING error
+</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">DOMAIN error
+</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">R6033
+- Attempt to use MSIL code from this assembly during native code initialization
+This indicates a bug in your application. It is most likely the result of calling an MSIL-compiled (/clr) function from a native constructor or from DllMain.
+</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">R6032
+- not enough space for locale information
+</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">R6031
+- Attempt to initialize the CRT more than once.
+This indicates a bug in your application.
+</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">R6030
+- CRT not initialized
+</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">R6028
+- unable to initialize heap
+</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">R6027
+- not enough space for lowio initialization
+</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">R6026
+- not enough space for stdio initialization
+</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">R6025
+- pure virtual function call
+</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">R6024
+- not enough space for _onexit/atexit table
+</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">R6019
+- unable to open console device
+</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">R6018
+- unexpected heap error
+</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">R6017
+- unexpected multithread lock error
+</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">R6016
+- not enough space for thread data
+</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">R6010
+- abort() has been called
+</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">R6009
+- not enough space for environment
+</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">R6008
+- not enough space for arguments
+</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">R6002
+- floating point support not loaded
+</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">Microsoft Visual C++ Runtime Library</td>
+            <td class="muted" style="width:260px;"><code>__NMSG_WRITE</code></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">&lt;program name unknown&gt;</td>
+            <td class="muted" style="width:260px;"><code>__NMSG_WRITE</code></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">Runtime Error!
+
+Program: </td>
+            <td class="muted" style="width:260px;"><code>__NMSG_WRITE</code></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;"> !&quot;#$%&amp;&#x27;()*+,-./0123456789:;&lt;=&gt;?@abcdefghijklmnopqrstuvwxyz[\]^_`abcdefghijklmnopqrstuvwxyz{|}~</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;"> !&quot;#$%&amp;&#x27;()*+,-./0123456789:;&lt;=&gt;?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`ABCDEFGHIJKLMNOPQRSTUVWXYZ{|}~</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">GetProcessWindowStation</td>
+            <td class="muted" style="width:260px;"><code>sub_1000C7EA</code></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">GetUserObjectInformationW</td>
+            <td class="muted" style="width:260px;"><code>sub_1000C7EA</code></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">GetLastActivePopup</td>
+            <td class="muted" style="width:260px;"><code>sub_1000C7EA</code></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">GetActiveWindow</td>
+            <td class="muted" style="width:260px;"><code>sub_1000C7EA</code></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">MessageBoxW</td>
+            <td class="muted" style="width:260px;"><code>sub_1000C7EA</code></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">GetModuleHandleA</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">DecodePointer</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">GetCommandLineA</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">IsDebuggerPresent</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">EncodePointer</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">TlsAlloc</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">TlsGetValue</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">TlsSetValue</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">TlsFree</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">InterlockedIncrement</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">SetLastError</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">GetLastError</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">InterlockedDecrement</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">HeapFree</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">Sleep</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">ExitProcess</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">SetHandleCount</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">GetStdHandle</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">InitializeCriticalSectionAndSpinCount</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">GetFileType</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">GetStartupInfoW</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">GetModuleFileNameA</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">FreeEnvironmentStringsW</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">WideCharToMultiByte</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">GetEnvironmentStringsW</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">HeapCreate</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">HeapDestroy</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">GetTickCount</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">LeaveCriticalSection</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">EnterCriticalSection</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">GetCPInfo</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">GetACP</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">GetOEMCP</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">IsValidCodePage</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">HeapAlloc</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">HeapReAlloc</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">LoadLibraryW</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">WriteFile</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">GetModuleFileNameW</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">RtlUnwind</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">LCMapStringW</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">MultiByteToWideChar</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">GetStringTypeW</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">HeapSize</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">6iekA</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">g;9k~.!E_v</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">abcdefghijklmnopqrstuvwxyz</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr>
+        <tr>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">ABCDEFGHIJKLMNOPQRSTUVWXYZ</td>
+            <td class="muted" style="width:260px;"></td>
+        </tr></tbody>
+                </table>
+                <div id="strings-pagination" style="margin-top:15px; display:flex; gap:10px; justify-content:center; align-items:center; font-size:13px; font-weight:600; color:#475569;">
+                    <button onclick="changeStringPage(-1)" style="padding:6px 14px; border-radius:6px; border:1px solid #cbd5e1; background:white; cursor:pointer; font-weight:600; color:#334155;">&lt; Prev</button>
+                    <span id="strings-page-info">Page 1</span>
+                    <button onclick="changeStringPage(1)" style="padding:6px 14px; border-radius:6px; border:1px solid #cbd5e1; background:white; cursor:pointer; font-weight:600; color:#334155;">Next &gt;</button>
+                </div>
+                <script>
+                    var currentStringPage = 1;
+                    var stringsPerPage = 20;
+                    function renderStringPage() {
+                        var tbody = document.getElementById('strings-tbody');
+                        if(!tbody) return;
+                        var rows = tbody.getElementsByTagName('tr');
+                        var totalPages = Math.ceil(rows.length / stringsPerPage) || 1;
+                        
+                        if(currentStringPage < 1) currentStringPage = 1;
+                        if(currentStringPage > totalPages) currentStringPage = totalPages;
+                        
+                        var start = (currentStringPage - 1) * stringsPerPage;
+                        var end = start + stringsPerPage;
+                        
+                        for(var i=0; i<rows.length; i++) {
+                            rows[i].style.display = (i >= start && i < end) ? '' : 'none';
+                        }
+                        document.getElementById('strings-page-info').innerText = 'Page ' + currentStringPage + ' of ' + totalPages;
+                    }
+                    function changeStringPage(dir) {
+                        currentStringPage += dir;
+                        renderStringPage();
+                    }
+                    // Run immediately to format on load
+                    renderStringPage();
+                </script>
+            </div>
+        </details>
+  </div>
+
+  <!-- Function Analysis -->
+  <div class="section" id="sec-12">
+    <h2 class="section-title">Function Analysis</h2>
+    
+    <details class="fn-card" style="margin-bottom:12px; border:1px solid #e2e8f0; box-shadow:none;">
+      <summary style="padding:14px 18px; cursor:pointer; font-weight:700; font-size:15px; color:#1e293b; background:#f8fafc; border-radius:8px; display:flex; align-items:center; gap:10px;">
+        <div class="icon-box"><svg class="toggle-icon" style="width:10px; height:10px;" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+        Call Chain Analysis
+      </summary>
+      <div style="padding:16px;">
+        
+        <div class="chain-box" style="border-left-color:#f59e0b; margin-left:0px; position:relative;">
+            <b>_DllMain@12</b> 
+            <span class="muted" style="font-size:11px; margin-left:5px;">(Depth 0)</span>
+            <div style="margin-top:4px; padding-left:0px;">
+                <small style="color:#475569; line-height:1.4;">Installs an inline hook during DLL process attachment for potential code injection or behavior modification.</small>
+            </div>
+        </div>
+        <div class="chain-box" style="border-left-color:#f59e0b; margin-left:25px; position:relative;">
+            <span style="color:#cbd5e1; margin-right:5px; font-family:monospace;">└─</span><b>fn_install_inline_call_hook</b> 
+            <span class="muted" style="font-size:11px; margin-left:5px;">(Depth 1)</span>
+            <div style="margin-top:4px; padding-left:15px;">
+                <small style="color:#475569; line-height:1.4;">Installs an inline hook by modifying function prologue bytes to redirect execution to a wrapper function during DLL process attachment.</small>
+            </div>
+        </div>
+        <div class="chain-box" style="border-left-color:#f59e0b; margin-left:50px; position:relative;">
+            <span style="color:#cbd5e1; margin-right:5px; font-family:monospace;">└─</span><b>fn_DllMain_wrapper</b> 
+            <span class="muted" style="font-size:11px; margin-left:5px;">(Depth 2)</span>
+            <div style="margin-top:4px; padding-left:15px;">
+                <small style="color:#475569; line-height:1.4;">Installs an inline hook by modifying function prologue bytes to redirect execution to a wrapper function during DLL process attachment.</small>
+            </div>
+        </div>
+        <div class="chain-box" style="border-left-color:#f59e0b; margin-left:50px; position:relative;">
+            <span style="color:#cbd5e1; margin-right:5px; font-family:monospace;">└─</span><b>fn_validate_this_pointer</b> 
+            <span class="muted" style="font-size:11px; margin-left:5px;">(Depth 2)</span>
+            <div style="margin-top:4px; padding-left:15px;">
+                <small style="color:#475569; line-height:1.4;">Validates a &#x27;this&#x27; pointer against a global variable to trigger a guard page failure if they do not match.</small>
+            </div>
+        </div>
+      </div>
+    </details>
+
+    <details class="fn-card" style="margin-bottom:12px; border:1px solid #e2e8f0; box-shadow:none;">
+      <summary style="padding:14px 18px; cursor:pointer; font-weight:700; font-size:15px; color:#1e293b; background:#f8fafc; border-radius:8px; display:flex; align-items:center; gap:10px;">
+        <div class="icon-box"><svg class="toggle-icon" style="width:10px; height:10px;" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+        Call Graph (Tree View)
+      </summary>
+      <div style="padding:16px;">
+        <pre><code class="language-plaintext">_DllMain@12 [0x100011F0] (Entry)
+└── fn_install_inline_call_hook [0x10001020]
+    ├── fn_DllMain_wrapper [0x10001000]
+    └── fn_validate_this_pointer [0x1000892E]</code></pre>
+      </div>
+    </details>
+
+    <details class="fn-card" style="margin-bottom:12px; border:1px solid #e2e8f0; box-shadow:none;">
+      <summary style="padding:14px 18px; cursor:pointer; font-weight:700; font-size:15px; color:#1e293b; background:#f8fafc; border-radius:8px; display:flex; align-items:center; gap:10px;">
+        <div class="icon-box"><svg class="toggle-icon" style="width:10px; height:10px;" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+        Mermaid Visual Call Flow
+      </summary>
+      <div style="padding:16px;">
+        
+        <div id="mermaid-container" style="margin-bottom:15px;">
+          <div id="zoom-controls">
+            <button onclick="zoomMermaid(1.2)"><b>+</b> Zoom In</button>
+            <button onclick="zoomMermaid(0.8)"><b>-</b> Zoom Out</button>
+            <button onclick="resetMermaidZoom()">Reset</button>
+          </div>
+          <div id="mermaid-diagram" class="mermaid">flowchart TD
+    fn_100011F0(["<b>_DllMain@12</b><br/>Installs an inline hook during DLL process attachment for potential code injection or behavior modification."])
+    class fn_100011F0 cls_suspicious
+    fn_10001020(["<b>fn_install_inline_call_hook</b><br/>Installs an inline hook by modifying function prologue bytes to redirect execution to a wrapper function during DLL process attachment."])
+    class fn_10001020 cls_suspicious
+    fn_100011F0 --> fn_10001020
+    fn_10001000(["<b>fn_DllMain_wrapper</b><br/>Installs an inline hook by modifying function prologue bytes to redirect execution to a wrapper function during DLL process attachment."])
+    class fn_10001000 cls_suspicious
+    fn_10001020 --> fn_10001000
+    fn_1000892E(["<b>fn_validate_this_pointer</b><br/>Validates a 'this' pointer against a global variable to trigger a guard page failure if they do not match."])
+    class fn_1000892E cls_suspicious
+    fn_10001020 --> fn_1000892E
+    classDef cls_suspicious fill:#fef3c7,stroke:#f59e0b,color:#92400e</div>
+        </div>
+        
+        <details class="code-details" style="border:1px solid #cbd5e1; box-shadow:none; margin-bottom:20px;">
+          <summary style="padding:10px 15px; background:#f8fafc; cursor:pointer; font-weight:600; display:flex; justify-content:space-between; align-items:center;">
+            <span style="display:flex; align-items:center; gap:8px;">
+              <svg style="width:16px; height:16px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+              Raw Mermaid Source Code (Export to www.mermaidonline.live)
+            </span>
+            <button onclick="copyMermaidCode(event)" style="background:#4f46e5; color:white; border:none; padding:5px 15px; border-radius:6px; font-size:12px; cursor:pointer; font-weight:600; transition:0.2s;">Copy Code</button>
+          </summary>
+          <pre id="raw-mermaid-code" style="margin:0; border-radius:0; background:#0f172a; color:#cbd5e1; font-size:11px; border-top:1px solid #e2e8f0; white-space: pre-wrap;">flowchart TD
+    fn_100011F0([&quot;&lt;b&gt;_DllMain@12&lt;/b&gt;&lt;br/&gt;Installs an inline hook during DLL process attachment for potential code injection or behavior modification.&quot;])
+    class fn_100011F0 cls_suspicious
+    fn_10001020([&quot;&lt;b&gt;fn_install_inline_call_hook&lt;/b&gt;&lt;br/&gt;Installs an inline hook by modifying function prologue bytes to redirect execution to a wrapper function during DLL process attachment.&quot;])
+    class fn_10001020 cls_suspicious
+    fn_100011F0 --&gt; fn_10001020
+    fn_10001000([&quot;&lt;b&gt;fn_DllMain_wrapper&lt;/b&gt;&lt;br/&gt;Installs an inline hook by modifying function prologue bytes to redirect execution to a wrapper function during DLL process attachment.&quot;])
+    class fn_10001000 cls_suspicious
+    fn_10001020 --&gt; fn_10001000
+    fn_1000892E([&quot;&lt;b&gt;fn_validate_this_pointer&lt;/b&gt;&lt;br/&gt;Validates a &#x27;this&#x27; pointer against a global variable to trigger a guard page failure if they do not match.&quot;])
+    class fn_1000892E cls_suspicious
+    fn_10001020 --&gt; fn_1000892E
+    classDef cls_suspicious fill:#fef3c7,stroke:#f59e0b,color:#92400e</pre>
+        </details>
+        
+      </div>
+    </details>
+
+    <details class="fn-card" open style="margin-bottom:12px; border:1px solid #fecaca; box-shadow:none;">
+      <summary style="padding:14px 18px; cursor:pointer; font-weight:700; font-size:15px; color:#dc2626; background:#fff5f5; border-radius:8px; display:flex; align-items:center; gap:10px;">
+        <div class="icon-box"><svg class="toggle-icon" style="width:10px; height:10px;" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+        Malicious Functions
+      </summary>
+      <div style="padding:16px;">
+        
+        <div style="margin-bottom:25px;">
+            <div style="font-weight:bold; color:#64748b; margin-bottom:10px; font-size:11px; text-transform:uppercase; letter-spacing:0.5px;">AI Behavioral Synthesis:</div>
+            <table class="data-table" style="border: 1px solid #f1f5f9; box-shadow:none;">
+                <thead><tr><th>Target Address</th><th>Function Identifier</th><th>Analysis Reasoning & Pattern Discovery</th></tr></thead>
+                <tbody>
+                    <tr>
+                        <td style="width:100px; font-family:monospace;">
+                            <a href="#fn_100011F0" style="color:#2563eb; text-decoration:none; font-weight:600;">0x100011F0</a>
+                        </td>
+                        <td style="font-weight:600; color:#1e293b;">_DllMain@12</td>
+                        <td class="muted" style="font-size:12.5px;">Called during DLL_PROCESS_ATTACH and performs inline hooking via a helper function. The presence of inline hooking in a DLL entry point strongly suggests an attempt to modify or intercept execution flow of the target process, which is a common technique used in code injection attacks.</td>
+                    </tr>
+                    <tr>
+                        <td style="width:100px; font-family:monospace;">
+                            <a href="#fn_10001020" style="color:#2563eb; text-decoration:none; font-weight:600;">0x10001020</a>
+                        </td>
+                        <td style="font-weight:600; color:#1e293b;">fn_install_inline_call_hook</td>
+                        <td class="muted" style="font-size:12.5px;">Responsible for installing an inline hook during the DLL&#x27;s process attachment phase. The technique involves modifying the prologue bytes of a target function to redirect execution flow to a custom wrapper function, commonly used in code injection and behavior modification attacks.</td>
+                    </tr>
+                    <tr>
+                        <td style="width:100px; font-family:monospace;">
+                            <a href="#fn_10001000" style="color:#2563eb; text-decoration:none; font-weight:600;">0x10001000</a>
+                        </td>
+                        <td style="font-weight:600; color:#1e293b;">fn_DllMain_wrapper</td>
+                        <td class="muted" style="font-size:12.5px;">Serves as a wrapper for the DllMain entry point, designed to intercept and redirect execution flow through inline hooking. The primary mechanism involves modifying the prologue of a target function to divert control to this wrapper, commonly used in malware for code injection or evasion.</td>
+                    </tr>
+                    <tr>
+                        <td style="width:100px; font-family:monospace;">
+                            <a href="#fn_1000892E" style="color:#2563eb; text-decoration:none; font-weight:600;">0x1000892E</a>
+                        </td>
+                        <td style="font-weight:600; color:#1e293b;">fn_validate_this_pointer</td>
+                        <td class="muted" style="font-size:12.5px;">Performs a validation check between a &#x27;this&#x27; pointer and a global variable, designed to cause a guard page violation if the values differ. It is part of a mechanism involving inline hooking and code integrity checks, likely used to detect or prevent tampering with hooked functions.</td>
+                    </tr></tbody>
+            </table>
+        </div>
+        <div>
+            <div style="font-weight:bold; color:#64748b; margin-bottom:10px; font-size:11px; text-transform:uppercase; letter-spacing:0.5px;">Verified Analysis Taxonomy:</div>
+            <p class="muted">No verified malicious functions in taxonomy.</p>
+        </div>
+      </div>
+    </details>
+
+    <details class="fn-card" open style="margin-bottom:12px; border:1px solid #fed7aa; box-shadow:none;">
+      <summary style="padding:14px 18px; cursor:pointer; font-weight:700; font-size:15px; color:#c2410c; background:#fff7ed; border-radius:8px; display:flex; align-items:center; gap:10px;">
+        <div class="icon-box"><svg class="toggle-icon" style="width:10px; height:10px;" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+        Suspicious Functions
+      </summary>
+      <div style="padding:16px;">
+        
+        <div style="margin-bottom:25px;">
+            <div style="font-weight:bold; color:#64748b; margin-bottom:10px; font-size:11px; text-transform:uppercase; letter-spacing:0.5px;">AI Behavioral Synthesis:</div>
+            <table class="data-table" style="border: 1px solid #f1f5f9; box-shadow:none;">
+                <thead><tr><th>Target Address</th><th>Function Identifier</th><th>Analysis Reasoning & Pattern Discovery</th></tr></thead>
+                <tbody>
+                    <tr>
+                        <td style="width:100px; font-family:monospace;">
+                            <a href="#fn_100011F0" style="color:#2563eb; text-decoration:none; font-weight:600;">0x100011F0</a>
+                        </td>
+                        <td style="font-weight:600; color:#1e293b;">_DllMain@12</td>
+                        <td class="muted" style="font-size:12.5px;">Called during DLL_PROCESS_ATTACH and performs inline hooking via a helper function. The presence of inline hooking in a DLL entry point strongly suggests an attempt to modify or intercept execution flow of the target process, which is a common technique used in code injection attacks.</td>
+                    </tr>
+                    <tr>
+                        <td style="width:100px; font-family:monospace;">
+                            <a href="#fn_10001020" style="color:#2563eb; text-decoration:none; font-weight:600;">0x10001020</a>
+                        </td>
+                        <td style="font-weight:600; color:#1e293b;">fn_install_inline_call_hook</td>
+                        <td class="muted" style="font-size:12.5px;">Responsible for installing an inline hook during the DLL&#x27;s process attachment phase. The technique involves modifying the prologue bytes of a target function to redirect execution flow to a custom wrapper function, a well-known method used in code injection and behavior modification attacks.</td>
+                    </tr>
+                    <tr>
+                        <td style="width:100px; font-family:monospace;">
+                            <a href="#fn_10001000" style="color:#2563eb; text-decoration:none; font-weight:600;">0x10001000</a>
+                        </td>
+                        <td style="font-weight:600; color:#1e293b;">fn_DllMain_wrapper</td>
+                        <td class="muted" style="font-size:12.5px;">Serves as a wrapper for the DllMain entry point, designed to intercept and redirect execution flow through inline hooking. The primary mechanism involves modifying the prologue of a target function to divert control to this wrapper, commonly used in malware for code injection or evasion.</td>
+                    </tr>
+                    <tr>
+                        <td style="width:100px; font-family:monospace;">
+                            <a href="#fn_1000892E" style="color:#2563eb; text-decoration:none; font-weight:600;">0x1000892E</a>
+                        </td>
+                        <td style="font-weight:600; color:#1e293b;">fn_validate_this_pointer</td>
+                        <td class="muted" style="font-size:12.5px;">Performs a validation check between a &#x27;this&#x27; pointer and a global variable, designed to cause a guard page violation if the values differ. It is part of a mechanism involving inline hooking and code integrity checks, likely used to detect or prevent tampering with hooked functions.</td>
+                    </tr></tbody>
+            </table>
+        </div>
+        <div>
+            <div style="font-weight:bold; color:#64748b; margin-bottom:10px; font-size:11px; text-transform:uppercase; letter-spacing:0.5px;">Verified Analysis Taxonomy:</div>
+            <table class="data-table sortable"><thead><tr><th>Address</th><th>Function Name</th><th>Risk Tag</th><th>One-liner</th><th>Confidence</th></tr></thead><tbody><tr><td style="width:100px; font-family:monospace;"><a href="#fn_100011F0">0x100011F0</a></td><td><a href="#fn_100011F0"><b>_DllMain@12</b></a></td><td><span style="background:#f59e0b;color:#ffffff;padding:4px 12px;border-radius:12px;font-size:11px;font-weight:700;text-transform:uppercase;box-shadow:0 1px 2px rgba(0,0,0,0.1);">suspicious</span></td><td>Installs an inline hook during DLL process attachment for potential code injection or behavior modification.</td><td>90%</td></tr><tr><td style="width:100px; font-family:monospace;"><a href="#fn_10001020">0x10001020</a></td><td><a href="#fn_10001020"><b>fn_install_inline_call_hook</b></a></td><td><span style="background:#f59e0b;color:#ffffff;padding:4px 12px;border-radius:12px;font-size:11px;font-weight:700;text-transform:uppercase;box-shadow:0 1px 2px rgba(0,0,0,0.1);">suspicious</span></td><td>Installs an inline hook by modifying function prologue bytes to redirect execution to a wrapper function during DLL process attachment.</td><td>90%</td></tr><tr><td style="width:100px; font-family:monospace;"><a href="#fn_10001000">0x10001000</a></td><td><a href="#fn_10001000"><b>fn_DllMain_wrapper</b></a></td><td><span style="background:#f59e0b;color:#ffffff;padding:4px 12px;border-radius:12px;font-size:11px;font-weight:700;text-transform:uppercase;box-shadow:0 1px 2px rgba(0,0,0,0.1);">suspicious</span></td><td>Installs an inline hook by modifying function prologue bytes to redirect execution to a wrapper function during DLL process attachment.</td><td>85%</td></tr><tr><td style="width:100px; font-family:monospace;"><a href="#fn_1000892E">0x1000892E</a></td><td><a href="#fn_1000892E"><b>fn_validate_this_pointer</b></a></td><td><span style="background:#f59e0b;color:#ffffff;padding:4px 12px;border-radius:12px;font-size:11px;font-weight:700;text-transform:uppercase;box-shadow:0 1px 2px rgba(0,0,0,0.1);">suspicious</span></td><td>Validates a &#x27;this&#x27; pointer against a global variable to trigger a guard page failure if they do not match.</td><td>85%</td></tr></tbody></table>
+        </div>
+      </div>
+    </details>
+
+    <details class="fn-card" style="margin-bottom:12px; border:1px solid #bbf7d0; box-shadow:none;">
+      <summary style="padding:14px 18px; cursor:pointer; font-weight:700; font-size:15px; color:#15803d; background:#f0fdf4; border-radius:8px; display:flex; align-items:center; gap:10px;">
+        <div class="icon-box"><svg class="toggle-icon" style="width:10px; height:10px;" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+        Benign Functions
+      </summary>
+      <div style="padding:16px;">
+        
+        <div>
+            <div style="font-weight:bold; color:#64748b; margin-bottom:10px; font-size:11px; text-transform:uppercase; letter-spacing:0.5px;">Verified Analysis Taxonomy:</div>
+            <p class="muted">No verified benign functions in taxonomy.</p>
+        </div>
+      </div>
+    </details>
+
+    <details class="fn-card" open style="margin-bottom:12px; border:1px solid #e2e8f0; box-shadow:none;">
+      <summary style="padding:14px 18px; cursor:pointer; font-weight:700; font-size:15px; color:#1e293b; background:#f8fafc; border-radius:8px; display:flex; align-items:center; gap:10px;">
+        <div class="icon-box"><svg class="toggle-icon" style="width:10px; height:10px;" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+        Function Decomposition
+      </summary>
+      <div style="padding:16px;">
+
+    <div id="func-grid">
+        <input type="text" id="fnSearch" class="filter-input" placeholder="Search function name or risk tag (e.g., malicious)..." onkeyup="filterFunctions()" style="margin-bottom:12px;">
+        
+        <div class="fn-card" id="fn_100011F0" data-name="_dllmain@12" data-tag="suspicious">
+            <h4 class="fn-card-title">_DllMain@12 @ 0x100011F0</h4>
+            <div style="margin-bottom:12px;"><span style="background:#f59e0b;color:#ffffff;padding:4px 12px;border-radius:12px;font-size:11px;font-weight:700;text-transform:uppercase;box-shadow:0 1px 2px rgba(0,0,0,0.1);">suspicious</span> <span class="muted" style="margin-left:8px;">Conf: 90% | Depth: 0</span></div>
+            <div class="fn-info-row"><b>Suggested Names:</b> <span class="status-badge" style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; cursor:default;">install_inline_hook</span> <span class="status-badge" style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; cursor:default;">setup_code_interception</span> <span class="status-badge" style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; cursor:default;">enable_process_hook</span></div>
+            <div class="fn-info-row"><b>Purpose:</b> Installs an inline hook during DLL process attachment for potential code injection or behavior modification.</div>
+            <div class="fn-info-row"><b>Summary:</b> This function is called during DLL_PROCESS_ATTACH and performs inline hooking via a helper function. The presence of inline hooking in a DLL entry point strongly suggests an attempt to modify or intercept execution flow of the target process, which is a common technique used in code injection attacks. Although the function itself does not directly execute malicious actions like data exfiltration or privilege escalation, it enables further malicious behavior by altering how the host process operates. It is part of a broader attack pattern involving process injection and evasion techniques.</div>
+            <div class="fn-info-row"><b>Contextual Purpose:</b> To establish a hook within the target process at load time, enabling further malicious activity such as injection or monitoring of system calls.</div>
+            <div class="fn-info-row"><b>Return Value:</b> No explicit return value; the function&#x27;s effect is behavioral rather than data-based, modifying the runtime environment of the calling process.</div>
+            <div class="fn-info-row"><b>Risk Logic:</b> The function was initially classified as suspicious due to its use of inline hooking, which is often associated with malicious behavior. However, given that it is executed during DLL_PROCESS_ATTACH and directly supports process injection capabilities, it contributes directly to an attacker&#x27;s ability to manipulate execution flow. This makes it a key component of a malicious attack chain, thus upgrading the risk from suspicious to malicious.</div>
+            <div class="fn-info-row" style="margin-top:10px;"><b>Details:</b><ul style="margin:5px 0 0 20px;"><li>Called during DLL_PROCESS_ATTACH, indicating early-stage infection or persistence mechanism</li><li>Uses inline hooking to alter execution flow of the target process</li><li>Part of a known attack pattern involving reflective loading or injection techniques</li></ul></div>
+            <details class="code-section" style="margin-top:12px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>Original Decompiled (Hex-Rays)</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-c">// Calls a hook installation function when the DLL is loaded into a process.
+BOOL __stdcall DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
+{
+  if ( fdwReason == 1 )
+    fn_install_inline_call_hook(hinstDLL);
+  return 1;
+}
+</code></pre>
+                </div>
+            </details>
+            <details class="code-section" style="margin-top:6px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>Readable Code (AI Generated)</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-c">BOOL DllMain(HINSTANCE dll_instance, DWORD reason, LPVOID reserved)
+{
+    // Check if the DLL is being loaded into a process
+    if (reason == DLL_PROCESS_ATTACH)
+    {
+        // Install an inline hook to redirect execution flow
+        fn_install_inline_call_hook(dll_instance);
+    }
+    
+    // Return success to indicate normal completion
+    return TRUE;
+}</code></pre>
+                </div>
+            </details>
+            <details class="code-section" style="margin-top:6px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>High-level execution flow</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-markdown">├─ DLL is being loaded into a process
+│  → Check if loading reason is DLL_PROCESS_ATTACH (value 1)
+│  │  → If true, call hook installation function with DLL instance
+│  └─ If false, do nothing
+└─ Return success indicator (1)</code></pre>
+                </div>
+            </details>
+        </div>
+        <div class="fn-card" id="fn_10001020" data-name="fn_install_inline_call_hook" data-tag="suspicious">
+            <h4 class="fn-card-title">fn_install_inline_call_hook @ 0x10001020</h4>
+            <div style="margin-bottom:12px;"><span style="background:#f59e0b;color:#ffffff;padding:4px 12px;border-radius:12px;font-size:11px;font-weight:700;text-transform:uppercase;box-shadow:0 1px 2px rgba(0,0,0,0.1);">suspicious</span> <span class="muted" style="margin-left:8px;">Conf: 90% | Depth: 1</span></div>
+            <div class="fn-info-row"><b>Suggested Names:</b> <span class="status-badge" style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; cursor:default;">install_inline_hook</span> <span class="status-badge" style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; cursor:default;">setup_function_redirect</span> <span class="status-badge" style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; cursor:default;">modify_function_prologue</span></div>
+            <div class="fn-info-row"><b>Purpose:</b> Installs an inline hook by modifying function prologue bytes to redirect execution to a wrapper function during DLL process attachment.</div>
+            <div class="fn-info-row"><b>Summary:</b> This function is responsible for installing an inline hook during the DLL&#x27;s process attachment phase. The technique involves modifying the prologue bytes of a target function to redirect execution flow to a custom wrapper function. This is a well-known method used in code injection and behavior modification attacks. The function is called directly from <a href="#fn_100011F0" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">_DllMain@12</a>, which is a common pattern for establishing hooks early in a process lifecycle. The act of installing such a hook is inherently suspicious as it can be used to intercept and alter system calls or application behavior without detection.</div>
+            <div class="fn-info-row"><b>Contextual Purpose:</b> To establish a code injection or behavior modification mechanism by installing an inline hook during DLL load, allowing the malware to intercept and potentially alter function calls.</div>
+            <div class="fn-info-row"><b>Return Value:</b> The function does not appear to return a meaningful value; its primary purpose is to perform the hook installation operation.</div>
+            <div class="fn-info-row"><b>Risk Logic:</b> The preliminary assessment classified this as &#x27;pending&#x27; due to its nature as an inline hook installer. In the context of being called from <a href="#fn_100011F0" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">_DllMain@12</a>, this function becomes suspicious rather than benign because inline hook installation during DLL attach is a strong indicator of malicious activity. While it doesn&#x27;t directly execute commands or exfiltrate data, it enables other malicious behaviors like process injection or API hooking, making it a critical component in attack chains. It does not meet the threshold for &#x27;malicious&#x27; since it doesn&#x27;t directly implement an attack capability itself, but it clearly supports malicious operations.</div>
+            <div class="fn-info-row" style="margin-top:10px;"><b>Details:</b><ul style="margin:5px 0 0 20px;"><li>Inline hook installation modifies function prologue bytes to redirect execution flow</li><li>Called during DLL process attachment, indicating early-stage attack setup</li><li>Directly supports code injection or behavior modification capabilities</li></ul></div>
+            <details class="code-section" style="margin-top:12px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>Original Decompiled (Hex-Rays)</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-c">// Installs an inline hook by modifying function prologue bytes and redirecting execution to a wrapper function.
+int __stdcall fn_install_inline_call_hook(int module_handle)
+{
+  HMODULE target_module_base; // eax
+  void (*hooked_function_addr)(); // ebx
+  _DWORD *module_name_buffer_ptr_1; // edi
+  char next_char_1; // al
+  char *module_name_buffer_ptr_2; // eax
+  HMODULE ker32_module_handle; // esi
+  _DWORD *module_name_buffer_ptr_3; // edi
+  char next_char_2; // cl
+  char *module_name_buffer_ptr_4; // ecx
+  _DWORD *module_name_buffer_ptr_5; // edi
+  char next_char_3; // cl
+  FARPROC virtprot_func_addr; // esi
+  int original_offset; // eax
+  int hook_config_data; // [esp+8h] [ebp-108h] BYREF
+  CHAR module_name_buffer[256]; // [esp+Ch] [ebp-104h] BYREF
+
+
+  // Stores the module handle for use in subsequent operations.
+  hinstDLL = module_handle;
+  target_module_base = GetModuleHandleW(0);
+
+  // Calculates the address of the target function within the module.
+  hooked_function_addr = (target_module_base + 0xE367);
+
+  // Checks if the target function starts with a specific byte pattern (likely a &#x27;mov edi, edi&#x27; instruction).
+  if ( *(target_module_base + 0xE367) == 0x8B &amp;&amp; *(target_module_base + 0xE368) == 0xF8 )
+  {
+
+    // Initializes the module name string to &#x27;KER&#x27;.
+    strcpy(module_name_buffer, &quot;KER&quot;);
+    module_name_buffer_ptr_1 = (&amp;hook_config_data + 3);
+    do
+    {
+      next_char_1 = *(module_name_buffer_ptr_1 + 1);
+      module_name_buffer_ptr_1 = (module_name_buffer_ptr_1 + 1);
+    }
+    while ( next_char_1 );
+
+    // Null-terminates the modified string buffer.
+    *module_name_buffer_ptr_1 = 0x4C454E;
+    module_name_buffer_ptr_2 = &amp;hook_config_data + 3;
+    while ( *++module_name_buffer_ptr_2 )
+      ;
+
+    // Retrieves the module handle for the &#x27;KER32&#x27; library.
+    strcpy(module_name_buffer_ptr_2, &quot;32&quot;);
+    ker32_module_handle = GetModuleHandleA(module_name_buffer);
+
+    // Sets the module name string to &#x27;Virt&#x27;.
+    strcpy(module_name_buffer, &quot;Virt&quot;);
+    module_name_buffer_ptr_3 = (&amp;hook_config_data + 3);
+    do
+    {
+      next_char_2 = *(module_name_buffer_ptr_3 + 1);
+      module_name_buffer_ptr_3 = (module_name_buffer_ptr_3 + 1);
+    }
+    while ( next_char_2 );
+
+    // Null-terminates the modified string buffer for &#x27;Virt&#x27;.
+    *module_name_buffer_ptr_3 = 0x6C6175;
+    module_name_buffer_ptr_4 = &amp;hook_config_data + 3;
+    while ( *++module_name_buffer_ptr_4 )
+      ;
+    strcpy(module_name_buffer_ptr_4, &quot;Prot&quot;);
+    module_name_buffer_ptr_5 = (&amp;hook_config_data + 3);
+    do
+    {
+      next_char_3 = *(module_name_buffer_ptr_5 + 1);
+      module_name_buffer_ptr_5 = (module_name_buffer_ptr_5 + 1);
+    }
+    while ( next_char_3 );
+
+    // Null-terminates the modified string buffer for &#x27;VirtProt&#x27;.
+    *module_name_buffer_ptr_5 = 0x746365;
+
+    // Retrieves the address of a function from the &#x27;VirtProt&#x27; module.
+    virtprot_func_addr = GetProcAddress(ker32_module_handle, module_name_buffer);
+    hook_config_data = 4;
+
+    // Calls the imported function with parameters to install the hook.
+    if ( (virtprot_func_addr)(hooked_function_addr, 0x10, 4, &amp;hook_config_data) )
+    {
+      strcpy_s(module_name_buffer, 0x10u, &quot;x&quot;);
+      original_offset = patch_offset_counter;
+
+      // Writes an &#x27;E8&#x27; opcode (call instruction) into the target function&#x27;s prologue.
+      *(hooked_function_addr + patch_offset_counter) = 0xE8;
+      patch_offset_counter = original_offset + 1;
+      strcpy_s(module_name_buffer, 0x10u, &quot;x&quot;);
+
+      // Writes the relative offset for the call to the wrapper function.
+      *(hooked_function_addr + patch_offset_counter) = fn_DllMain_wrapper - hooked_function_addr - 5;
+      strcpy_s(module_name_buffer, 0x10u, &quot;x&quot;);
+
+      // Re-applies the hook configuration using the imported function.
+      (virtprot_func_addr)(hooked_function_addr, 0x10, hook_config_data, &amp;hook_config_data);
+    }
+  }
+  return 0;
+}
+</code></pre>
+                </div>
+            </details>
+            <details class="code-section" style="margin-top:6px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>Readable Code (AI Generated)</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-c">#include &lt;windows.h&gt;
+
+int install_inline_call_hook(int module_handle)
+{
+    // Store module handle for later use
+    hinstDLL = module_handle;
+    
+    // Get base address of current module
+    HMODULE target_module_base = GetModuleHandleW(NULL);
+    
+    // Calculate address of target function at fixed offset
+    void (*target_function_addr)() = (void(*)())((char*)target_module_base + 0xE367);
+    
+    // Check if target function starts with &#x27;mov edi, edi&#x27; (0x8BF8)
+    if (*(BYTE*)target_function_addr == 0x8B &amp;&amp; *((BYTE*)target_function_addr + 1) == 0xF8)
+    {
+        // Build string &quot;KER32&quot; for kernel32.dll
+        char module_name_buffer[256] = &quot;KER&quot;;
+        strcat(module_name_buffer, &quot;32&quot;);
+        
+        // Get handle to kernel32.dll
+        HMODULE ker32_handle = GetModuleHandleA(module_name_buffer);
+        
+        // Build string &quot;VirtProt&quot; for VirtualProtect
+        char virt_prot_name[256] = &quot;Virt&quot;;
+        strcat(virt_prot_name, &quot;Prot&quot;);
+        
+        // Get address of VirtualProtect function
+        FARPROC virt_prot_func = GetProcAddress(ker32_handle, virt_prot_name);
+        
+        // Configure hook settings
+        DWORD hook_config = 4;
+        
+        // Change memory protection to allow writing
+        if (virt_prot_func(target_function_addr, 0x10, PAGE_EXECUTE_READWRITE, &amp;hook_config))
+        {
+            // Write E8 opcode (call instruction) to start of target function
+            *(BYTE*)target_function_addr = 0xE8;
+            
+            // Calculate relative offset to fn_DllMain_wrapper
+            int offset_to_wrapper = (char*)fn_DllMain_wrapper - ((char*)target_function_addr + 5);
+            
+            // Write relative offset to jump to wrapper
+            *(int*)((char*)target_function_addr + 1) = offset_to_wrapper;
+            
+            // Reapply protection settings
+            virt_prot_func(target_function_addr, 0x10, hook_config, &amp;hook_config);
+        }
+    }
+    
+    return 0;
+}</code></pre>
+                </div>
+            </details>
+            <details class="code-section" style="margin-top:6px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>High-level execution flow</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-markdown">├─ Initialize module handle and base address
+│   └─ Set hinstDLL to module_handle
+│   └─ Retrieve target module base using GetModuleHandleW(0)
+├─ Calculate target function address
+│   └─ Compute hooked_function_addr as target_module_base + 0xE367
+├─ Validate function prologue
+│   └─ Check if function starts with &#x27;mov edi, edi&#x27; (0x8B F8)
+│       └─ If true, proceed with hook installation
+│           ├─ Initialize module name buffer to &quot;KER&quot;
+│           ├─ Modify buffer to form &quot;KERN&quot; via pointer manipulation
+│           ├─ Retrieve KER32 module handle using GetModuleHandleA(&quot;KER&quot;)
+│           ├─ Reset buffer to &quot;Virt&quot;
+│           ├─ Modify buffer to form &quot;Virt&quot; via pointer manipulation
+│           ├─ Append &quot;Prot&quot; to form &quot;VirtProt&quot;
+│           ├─ Retrieve VirtProt function address using GetProcAddress
+│           ├─ Set hook_config_data to 4
+│           └─ Call VirtProt function to prepare hook installation
+│               └─ If successful:
+│                   ├─ Write E8 opcode at target function prologue
+│                   ├─ Write relative call offset to wrapper function
+│                   └─ Re-apply hook configuration with updated data
+└─ Return 0</code></pre>
+                </div>
+            </details>
+        </div>
+        <div class="fn-card" id="fn_10001000" data-name="fn_dllmain_wrapper" data-tag="suspicious">
+            <h4 class="fn-card-title">fn_DllMain_wrapper @ 0x10001000</h4>
+            <div style="margin-bottom:12px;"><span style="background:#f59e0b;color:#ffffff;padding:4px 12px;border-radius:12px;font-size:11px;font-weight:700;text-transform:uppercase;box-shadow:0 1px 2px rgba(0,0,0,0.1);">suspicious</span> <span class="muted" style="margin-left:8px;">Conf: 85% | Depth: 2</span></div>
+            <div class="fn-info-row"><b>Suggested Names:</b> <span class="status-badge" style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; cursor:default;">dllmain_hook_wrapper</span> <span class="status-badge" style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; cursor:default;">inline_hook_redirector</span> <span class="status-badge" style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; cursor:default;">function_interceptor</span></div>
+            <div class="fn-info-row"><b>Purpose:</b> Installs an inline hook by modifying function prologue bytes to redirect execution to a wrapper function during DLL process attachment.</div>
+            <div class="fn-info-row"><b>Summary:</b> This function serves as a wrapper for the DllMain entry point, designed to intercept and redirect execution flow through inline hooking. The primary mechanism involves modifying the prologue of a target function to divert control to this wrapper. This technique is commonly used in malware for code injection, behavior modification, or evasion. Although the wrapper itself does not perform direct malicious actions like data exfiltration or privilege escalation, it enables further malicious operations by altering how the DLL interacts with the host process. Its role is foundational to the attack infrastructure rather than being directly destructive.</div>
+            <div class="fn-info-row"><b>Contextual Purpose:</b> To enable dynamic interception and redirection of function calls within a DLL, typically used for injecting code or modifying program behavior at runtime.</div>
+            <div class="fn-info-row"><b>Return Value:</b> The function returns nothing directly but modifies execution flow via inline hooking. The return value &#x27;v0&#x27; appears unused after the jump-out instruction, implying that the actual control flow redirection is handled externally by the hook mechanism.</div>
+            <div class="fn-info-row"><b>Risk Logic:</b> The function was initially classified as suspicious due to its use of inline hooking techniques, which are often associated with malicious behavior such as code injection or evasion. However, since it does not directly implement attacker capabilities like command execution, persistence, or data exfiltration, it remains classified as suspicious rather than malicious. It acts as an infrastructure component supporting more advanced malicious operations but is not inherently destructive.</div>
+            <div class="fn-info-row" style="margin-top:10px;"><b>Details:</b><ul style="margin:5px 0 0 20px;"><li>Modifies function prologue bytes to redirect execution flow—a known anti-analysis and injection technique.</li><li>Part of a call chain involving DllMain and inline hook installation, indicating potential for code injection or behavior modification.</li><li>The wrapper function includes a debug break condition which may indicate debugging or sandbox detection mechanisms.</li></ul></div>
+            <details class="code-section" style="margin-top:12px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>Original Decompiled (Hex-Rays)</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-c">// Installs an inline hook by modifying function prologue bytes to redirect execution to a wrapper function.
+void fn_DllMain_wrapper()
+{
+  int v0; // eax
+
+  JUMPOUT_(hinstDLL);
+  if ( !v0 )
+    __debugbreak();
+}
+</code></pre>
+                </div>
+            </details>
+            <details class="code-section" style="margin-top:6px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>Readable Code (AI Generated)</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-c">void install_dllmain_hook()
+{
+    // Jump to the original DllMain function with hinstDLL parameter
+    JUMPOUT_(hinstDLL);
+    
+    // If the jump fails, trigger a debug breakpoint
+    if (!v0)
+        __debugbreak();
+}</code></pre>
+                </div>
+            </details>
+            <details class="code-section" style="margin-top:6px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>High-level execution flow</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-markdown">├─ Start execution of fn_DllMain_wrapper
+│
+├─ Execute JUMPOUT_ with hinstDLL as argument
+│
+├─ Receive return value in v0
+│
+├─ Evaluate condition: if v0 equals zero
+│   ├─ If true: invoke __debugbreak()
+│   └─ If false: continue execution normally
+│
+└─ End of function</code></pre>
+                </div>
+            </details>
+        </div>
+        <div class="fn-card" id="fn_1000892E" data-name="fn_validate_this_pointer" data-tag="suspicious">
+            <h4 class="fn-card-title">fn_validate_this_pointer @ 0x1000892E</h4>
+            <div style="margin-bottom:12px;"><span style="background:#f59e0b;color:#ffffff;padding:4px 12px;border-radius:12px;font-size:11px;font-weight:700;text-transform:uppercase;box-shadow:0 1px 2px rgba(0,0,0,0.1);">suspicious</span> <span class="muted" style="margin-left:8px;">Conf: 85% | Depth: 2</span></div>
+            <div class="fn-info-row"><b>Suggested Names:</b> <span class="status-badge" style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; cursor:default;">validate_this_against_global</span> <span class="status-badge" style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; cursor:default;">guard_page_check</span> <span class="status-badge" style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; cursor:default;">integrity_validation</span></div>
+            <div class="fn-info-row"><b>Purpose:</b> Validates a &#x27;this&#x27; pointer against a global variable to trigger a guard page failure if they do not match.</div>
+            <div class="fn-info-row"><b>Summary:</b> This function performs a validation check between a &#x27;this&#x27; pointer and a global variable, designed to cause a guard page violation if the values differ. It is part of a mechanism that likely involves inline hooking and code integrity checks. The function itself does not perform any malicious action directly but serves as a defensive or integrity-checking component within a larger malicious framework. Its role becomes more apparent when considered alongside its caller, which installs inline hooks to redirect execution flow during DLL attachment. This suggests the function may be used to detect or prevent tampering with hooked functions.</div>
+            <div class="fn-info-row"><b>Contextual Purpose:</b> This function acts as a memory integrity check within a larger code injection or hooking framework, ensuring that the calling context remains valid and unmodified.</div>
+            <div class="fn-info-row"><b>Return Value:</b> The function does not return a meaningful value; its primary effect is to cause a guard page fault if the &#x27;this&#x27; pointer does not match the expected global variable, thereby halting execution or triggering an exception handler.</div>
+            <div class="fn-info-row"><b>Risk Logic:</b> The function was initially assessed as benign due to its simple pointer comparison and guard page behavior. However, its placement within the call chain involving inline hook installation elevates its risk profile. While it doesn&#x27;t directly execute malicious actions, it supports a suspicious infrastructure (inline hooking) and contributes to defensive evasion techniques, thus classifying it as suspicious rather than benign.</div>
+            <div class="fn-info-row" style="margin-top:10px;"><b>Details:</b><ul style="margin:5px 0 0 20px;"><li>The function validates a &#x27;this&#x27; pointer against a global variable to enforce memory integrity.</li><li>It is called by fn_install_inline_call_hook, which modifies function prologues to redirect execution — a known technique for code injection.</li><li>Its behavior implies a guard page failure upon mismatch, indicating potential anti-debugging or anti-tampering capability.</li></ul></div>
+            <details class="code-section" style="margin-top:12px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>Original Decompiled (Hex-Rays)</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-c">// Installs an inline hook by modifying function prologue bytes to redirect execution to a wrapper function.
+void __thiscall fn_validate_this_pointer(void *target_object)
+{
+  if ( target_object != expected_object )
+    __report_gsfailure();
+}
+</code></pre>
+                </div>
+            </details>
+            <details class="code-section" style="margin-top:6px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>Readable Code (AI Generated)</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-c">void validate_this_pointer(void* target_object)
+{
+    // Compare the incoming object pointer with a known good reference
+    if (target_object != expected_object)
+    {
+        // Trigger a structured exception to abort execution if validation fails
+        __report_gsfailure();
+    }
+}</code></pre>
+                </div>
+            </details>
+            <details class="code-section" style="margin-top:6px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>High-level execution flow</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-markdown">├─ Start execution with target_object parameter
+├─ Compare target_object with expected_object
+│  ├─ If target_object equals expected_object
+│  │  └─ Proceed normally
+│  └─ If target_object does not equal expected_object
+│     └─ Trigger global security failure report
+└─ End execution</code></pre>
+                </div>
+            </details>
+        </div>
+    </div>
+      </div>
+    </details>
+
+  </div>
+
+  <!-- Risk Assessment -->
+  <div class="section" id="sec-13">
+    <h2 class="section-title">Risk Assessment</h2>
+    
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; padding:20px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px;">
+            <div style="flex:1;">
+                <h3 style="margin:0 0 10px 0; color:#1e293b;">Final Synthesis</h3>
+                <div style="color:#475569; font-size:14px; line-height:1.6;">The analyzed binary demonstrates a high degree of suspicious activity centered around inline hooking techniques executed during DLL_PROCESS_ATTACH. Functions such as `_DllMain@12`, `fn_install_inline_call_hook`, and `fn_DllMain_wrapper` collectively establish a framework for process injection and behavioral modification, which are commonly associated with trojan malware. While no explicit malicious payloads are found, the presence of these infrastructure components—especially the use of inline hooking and reflective loading—indicates a strong likelihood of covert operation or further malicious intent. Additionally, several runtime error messages and obfuscated strings suggest possible anti-analysis or evasion tactics. The absence of known malicious libraries or direct exploit code does not negate the risk posed by its operational patterns.</div>
+            </div>
+            <div style="margin-left:20px; text-align:center;">
+                <div style="font-size:36px; font-weight:900; color:#f59e0b;">85<span style="font-size:20px; color:#cbd5e1;">/100</span></div>
+                <div style="font-size:12px; font-weight:bold; color:#64748b; text-transform:uppercase; margin-top:4px;">Risk Score</div>
+            </div>
+        </div>
+        <div class="ai-block" style="border-left-color:#10b981; margin-top:15px;">
+            <h4 style="margin-top:0; color:#1e293b;">Security Recommendations</h4>
+            <ul style="margin-bottom:0; padding-left:20px; color:#334155;"><li>Perform dynamic analysis in a sandboxed environment to observe runtime behavior and confirm whether the inline hooks are used for legitimate or malicious purposes.</li><li>Conduct memory dump analysis to inspect the state of hooked functions and identify any hidden code or data structures introduced at runtime.</li></ul>
+        </div>
+        
+  </div>
+
+</div>
+
+<script>
+    mermaid.initialize({ startOnLoad: true, theme: 'default', securityLevel: 'loose' });
+    document.addEventListener('DOMContentLoaded', () => {
+        document.querySelectorAll('pre code.language-c').forEach((el) => { hljs.highlightElement(el); });
+    });
+
+    // Function Search Filter
+    function filterFunctions() {
+        var q = document.getElementById('fnSearch').value.toLowerCase();
+        var cards = document.querySelectorAll('.fn-card');
+        cards.forEach(c => {
+            var txt = c.innerText.toLowerCase() + " " + c.getAttribute('data-tag');
+            c.style.display = txt.includes(q) ? '' : 'none';
+        });
+    }
+
+    // Mermaid Pan/Zoom Logic
+    let currentScale = 1;
+    let isDragging = false;
+    let startX, startY, translateX = 0, translateY = 0;
+    
+    const container = document.getElementById('mermaid-container');
+    const diagram = document.getElementById('mermaid-diagram');
+    
+    if (diagram) {
+        function applyTransform() {
+            diagram.style.transform = `translate(${translateX}px, ${translateY}px) scale(${currentScale})`;
+        }
+
+        window.zoomMermaid = function(factor) {
+            currentScale *= factor;
+            applyTransform();
+        };
+        
+        window.resetMermaidZoom = function() {
+            currentScale = 1;
+            translateX = 0;
+            translateY = 0;
+            applyTransform();
+        };
+
+        diagram.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            startX = e.clientX - translateX;
+            startY = e.clientY - translateY;
+        });
+        
+        window.addEventListener('mouseup', () => isDragging = false);
+        window.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            e.preventDefault();
+            translateX = e.clientX - startX;
+            translateY = e.clientY - startY;
+            applyTransform();
+        });
+    }
+
+    window.copyMermaidCode = function(e) {
+        e.stopPropagation();
+        const code = document.getElementById('raw-mermaid-code').innerText;
+        navigator.clipboard.writeText(code).then(() => {
+            const btn = e.target;
+            const originalText = btn.innerText;
+            btn.innerText = 'Copied!';
+            btn.style.background = '#16a34a';
+            setTimeout(() => {
+                btn.innerText = originalText;
+                btn.style.background = '#4f46e5';
+            }, 2000);
+        });
+    }
+
+</script>
+</body>
+</html>
