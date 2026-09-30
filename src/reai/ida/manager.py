@@ -78,29 +78,45 @@ class IDAManager:
         LOGGER.info("IDA initialization executable=%s source=%s", environment.executable, environment.discovery_source)
         LOGGER.info("auto-analysis start sample=%s", sample_path)
         try:
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 command,
-                check=False,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 env=get_clean_ida_environment(),
-                timeout=self.config.timeout_seconds,
             )
-        except subprocess.TimeoutExpired as exc:
-
-            raise IDAAnalysisError(f"IDA analysis timed out after {self.config.timeout_seconds}s.") from exc
+            try:
+                stdout, stderr = process.communicate(timeout=self.config.timeout_seconds)
+                returncode = process.returncode
+            except subprocess.TimeoutExpired as exc:
+                process.kill()
+                process.wait()
+                raise IDAAnalysisError(f"IDA analysis timed out after {self.config.timeout_seconds}s.") from exc
+            except (KeyboardInterrupt, SystemExit):
+                process.kill()
+                process.wait()
+                raise
         finally:
             try:
                 args_path.unlink(missing_ok=True)
             except OSError:
                 pass
 
-        if completed.returncode != 0:
-            details = (completed.stderr or completed.stdout or "").strip()
+        if returncode != 0:
+            details = (stderr or stdout or "").strip()
+            failure_log = Path(tempfile.gettempdir()) / "reai_ida_failure.txt"
+            if failure_log.exists():
+                try:
+                    ida_err = failure_log.read_text(encoding="utf-8").strip()
+                    details = f"{details}\n\nIDA Script Traceback:\n{ida_err}".strip()
+                    failure_log.unlink()
+                except Exception:
+                    pass
+
             raise IDAAnalysisError(
                 "IDA analysis failed.\n\n"
                 f"Executable:\n{environment.executable}\n\n"
-                f"Exit code:\n{completed.returncode}\n\n"
+                f"Exit code:\n{returncode}\n\n"
                 f"Details:\n{details or '<no output>'}"
             )
 

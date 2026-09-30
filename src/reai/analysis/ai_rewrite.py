@@ -51,10 +51,10 @@ def generate_ai_readable_code(sample_id: str, workspace_root: Path | None = None
     
     target_functions = [
         f for f in model.key_functions 
-        if f.importance_label in ("CRITICAL", "HIGH")
+        if f.importance_label == "CRITICAL"
     ]
     
-    print(f"[*] Found {len(target_functions)} target functions for AI rewriting.")
+    print(f"[*] Found {len(target_functions)} malicious (CRITICAL) target functions for AI rewriting.")
     
     for fn in target_functions:
         out_path = readable_c_dir / f"{fn.address}.c"

@@ -13,10 +13,10 @@ def utc_now() -> str:
 
 
 def sanitize_name(value: str) -> str:
-    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", value or "function")
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f$@~]', "_", value or "function")
     name = re.sub(r"\s+", "_", name)
     name = re.sub(r"_+", "_", name).strip(" ._")
-    return (name or "function")[:96]
+    return (name or "function")[:48]
 
 
 def artifact_filename(address: int, name: str, extension: str) -> str:
@@ -243,12 +243,39 @@ def collect_functions(imports_by_address, strings_by_address, workspace_root):
             "recursive": False,
         }
 
+        if hexrays_available:
+            try:
+                cfunc = ida_hexrays.decompile(func.start_ea)
+                pseudo_lines = [ida_lines.tag_remove(line.line) for line in cfunc.get_pseudocode()]
+                pseudo_name = artifact_filename(int(func.start_ea), name, "c")
+                (pseudocode_dir / pseudo_name).write_text(
+                    "\n".join(pseudo_lines) + "\n",
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                record["decompilation_status"] = "success"
+                record["pseudocode_path"] = str(Path("Extracted Codes") / "pseudocode" / pseudo_name)
+            except Exception as exc:
+                record["decompilation_status"] = "failed"
+                record["decompilation_error"] = str(exc)
+                failures.append(
+                    {
+                        "extractor": "pseudocode",
+                        "address": int(func.start_ea),
+                        "name": name,
+                        "reason": str(exc),
+                        "fatal": False,
+                    }
+                )
+
+        needs_disassembly = record["decompilation_status"] != "success"
         dis_lines = []
         for head in idautils.Heads(func.start_ea, func.end_ea):
-            text = safe_call("", ida_lines.generate_disasm_line, head, 0) or ""
-            text = ida_lines.tag_remove(text)
-            if text:
-                dis_lines.append(f"{int(head):016x}: {text}")
+            if needs_disassembly:
+                text = safe_call("", ida_lines.generate_disasm_line, head, 0) or ""
+                text = ida_lines.tag_remove(text)
+                if text:
+                    dis_lines.append(f"{int(head):016x}: {text}")
 
             for callee in idautils.CodeRefsFrom(head, 0):
                 callee_func = ida_funcs.get_func(callee)
@@ -289,35 +316,13 @@ def collect_functions(imports_by_address, strings_by_address, workspace_root):
                         }
                     )
 
-        dis_name = artifact_filename(int(func.start_ea), name, "asm")
-        (disassembly_dir / dis_name).write_text("\n".join(dis_lines) + "\n", encoding="utf-8", errors="replace")
-        record["disassembly_status"] = "success"
-        record["disassembly_path"] = str(Path("Extracted Codes") / "disassembly" / dis_name)
-
-        if hexrays_available:
-            try:
-                cfunc = ida_hexrays.decompile(func.start_ea)
-                pseudo_lines = [ida_lines.tag_remove(line.line) for line in cfunc.get_pseudocode()]
-                pseudo_name = artifact_filename(int(func.start_ea), name, "c")
-                (pseudocode_dir / pseudo_name).write_text(
-                    "\n".join(pseudo_lines) + "\n",
-                    encoding="utf-8",
-                    errors="replace",
-                )
-                record["decompilation_status"] = "success"
-                record["pseudocode_path"] = str(Path("Extracted Codes") / "pseudocode" / pseudo_name)
-            except Exception as exc:
-                record["decompilation_status"] = "failed"
-                record["decompilation_error"] = str(exc)
-                failures.append(
-                    {
-                        "extractor": "pseudocode",
-                        "address": int(func.start_ea),
-                        "name": name,
-                        "reason": str(exc),
-                        "fatal": False,
-                    }
-                )
+        if needs_disassembly:
+            dis_name = artifact_filename(int(func.start_ea), name, "asm")
+            (disassembly_dir / dis_name).write_text("\n".join(dis_lines) + "\n", encoding="utf-8", errors="replace")
+            record["disassembly_status"] = "success"
+            record["disassembly_path"] = str(Path("Extracted Codes") / "disassembly" / dis_name)
+        else:
+            record["disassembly_status"] = "skipped"
 
         record["callees"] = sorted(set(record["callees"]))
         record["string_refs"] = sorted(set(record["string_refs"]))
