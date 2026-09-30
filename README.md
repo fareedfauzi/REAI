@@ -8,6 +8,9 @@ Give it a binary:
 python -m reai malware.exe
 ```
 
+<img width="1113" height="873" alt="image" src="https://github.com/user-attachments/assets/e91a48db-d7ef-416c-9716-5118fffb8c42" />
+
+
 REAI runs static analysis, exports IDA context, analyzes unnamed functions bottom-up, uses targeted MCP queries to investigate important or unresolved behavior, validates findings, enriches a separate IDB copy, and writes a technical report.
 
 Primary outputs:
