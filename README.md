@@ -289,8 +289,8 @@ IDA-dependent tests are skipped unless `REAI_IDA_PATH` or `IDA_PATH` is set.
 
 ## Release Status
 
-Version `0.1.0` is a research preview. Documentation and tests are in place, but release requires an explicit project license decision and final verification in a licensed IDA environment.
+Version `0.1.0` is a research preview. Documentation and tests are in place, but final verification in a licensed IDA environment is recommended.
 
 ## License
 
-No project license file is currently present. Treat this as a release blocker until the project owner adds one.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
