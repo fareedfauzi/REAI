@@ -5,6 +5,7 @@ from pathlib import Path
 
 from reai.ai.schemas import FunctionContext
 from reai.storage.repository import AnalysisRepository
+from reai.utils.code_artifacts import extract_consolidated_c_function, is_consolidated_pseudocode_path
 from reai.utils.paths import WorkspacePaths
 
 
@@ -13,6 +14,7 @@ class FunctionContextBuilder:
         self.repository = repository
         self.workspace = workspace
         self.max_text_chars = max_text_chars
+        self._artifact_cache: dict[str, str | None] = {}
 
     def build(self, sample_id: str, address: str) -> FunctionContext:
         records = self.repository.build_context_records(sample_id, address)
@@ -20,7 +22,7 @@ class FunctionContextBuilder:
         function_record = json.loads(function["record_json"])
         context_truncated = False
 
-        pseudocode = self._read_artifact(function_record.get("pseudocode_path"))
+        pseudocode = self._read_pseudocode(function_record)
         disassembly = None
         if function_record.get("decompilation_status") != "success":
             disassembly = self._read_artifact(function_record.get("disassembly_path"))
@@ -49,12 +51,16 @@ class FunctionContextBuilder:
     def _read_artifact(self, relative_path: str | None) -> str | None:
         if not relative_path:
             return None
+        if relative_path in self._artifact_cache:
+            return self._artifact_cache[relative_path]
         root_resolved = self.workspace.root.resolve()
         candidate = (self.workspace.root / relative_path).resolve()
         try:
             candidate.relative_to(root_resolved)
             if candidate.exists() and candidate.is_file():
-                return candidate.read_text(encoding="utf-8", errors="replace")
+                text = candidate.read_text(encoding="utf-8", errors="replace")
+                self._artifact_cache[relative_path] = text
+                return text
         except ValueError:
             pass
 
@@ -63,11 +69,23 @@ class FunctionContextBuilder:
         try:
             fallback.relative_to(root_resolved)
             if fallback.exists() and fallback.is_file():
-                return fallback.read_text(encoding="utf-8", errors="replace")
+                text = fallback.read_text(encoding="utf-8", errors="replace")
+                self._artifact_cache[relative_path] = text
+                return text
         except ValueError:
             pass
 
+        self._artifact_cache[relative_path] = None
         return None
+
+    def _read_pseudocode(self, function_record: dict) -> str | None:
+        relative_path = function_record.get("pseudocode_path")
+        text = self._read_artifact(relative_path)
+        if not text:
+            return None
+        if is_consolidated_pseudocode_path(relative_path):
+            return extract_consolidated_c_function(text, function_record.get("name"))
+        return text
 
     def _truncate(self, text: str | None) -> tuple[str | None, bool]:
         if text is None or len(text) <= self.max_text_chars:

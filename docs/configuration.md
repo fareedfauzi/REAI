@@ -40,6 +40,22 @@ api_key = ""
 
 If `api-key` / `api_key` is empty or omitted, REAI uses the provider's normal environment variable, such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
 
+## Phase 2 Performance
+
+Phase 2 always extracts function metadata, strings, imports, xrefs, and call graph context. Hex-Rays pseudocode is the expensive part on large IDBs, so REAI defaults to targeted decompilation instead of decompiling every function up front. Targeted mode batch-decompiles IDA entry-point functions, unnamed `sub_*`-style functions, and callback-like functions referenced as function pointers or named like callbacks/procs into chunked `Extracted Codes/pseudocode/decompiled_*.c` files.
+
+```toml
+[ida]
+decompile_mode = "targeted"   # all, targeted, or none
+decompile_max_functions = 0   # 0 means unlimited
+decompile_batch_size = 25     # functions per Hex-Rays batch, not a coverage limit
+disassembly_max_lines_per_function = 1500 # 0 means unlimited
+```
+
+For very large samples where Hex-Rays is still too slow, use `decompile_mode = "none"`. Phase 2 still extracts metadata, call graph, imports, strings, and xrefs, then writes capped disassembly for target functions so Phase 3 can continue without pseudocode. Use `decompile_mode = "all"` only when you explicitly want Hex-Rays output for every function.
+
+Phase 3 targets functions with recovered pseudocode or disassembly, plus normal entry-point and `sub_*` targets. If `ai.max_functions` is set, recovered pseudocode is preferred before non-decompiled targets. When Phase 2 uses chunked batch output, Phase 3 reads only the matching function body from the relevant `decompiled_*.c` file instead of sending the whole file as context.
+
 ## AI Providers
 
 | Provider | Notes |

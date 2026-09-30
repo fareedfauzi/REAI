@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Callable
 from uuid import uuid4
 
 from reai.ai.confidence import calibrate_confidence
@@ -28,19 +29,31 @@ from reai.utils.paths import WorkspacePaths
 
 
 class MCPInvestigator:
-    def __init__(self, config: MCPConfig, repository: AnalysisRepository, workspace: WorkspacePaths) -> None:
+    def __init__(
+        self,
+        config: MCPConfig,
+        repository: AnalysisRepository,
+        workspace: WorkspacePaths,
+        *,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> None:
         self.config = config
         self.repository = repository
         self.workspace = workspace
+        self.progress_callback = progress_callback
         self.planner = InvestigationPlanner()
 
     def run(self, sample_id: str) -> MCPInvestigationStats | None:
+        self._progress("creating MCP client")
         sample = self.repository.get_sample(sample_id)
         client = create_mcp_client(self.config, workspace=self.workspace, sample=sample)
         if client is None:
+            self._progress("MCP provider disabled; skipping")
             return None
 
+        self._progress("selecting investigation targets")
         targets = self.repository.list_mcp_targets(sample_id, max_functions=self.config.max_functions)
+        self._progress(f"selected {len(targets)} investigation targets")
         session = ReadOnlyMCPSession(
             client,
             allowlist=self.config.allowlist,
@@ -48,11 +61,13 @@ class MCPInvestigator:
         )
         session_id: str | None = None
         try:
+            self._progress("starting read-only MCP session")
             session.connect()
             metadata = session.session_metadata()
             session_id = metadata.session_id
             self.repository.start_mcp_session(sample_id, metadata, status="RUNNING")
         except Exception:
+            self._progress("MCP session unavailable; recording degraded results")
             if self.config.failure_policy == "fail":
                 raise MCPError("Core MCP session could not be started. Use --no-mcp or [mcp].failure_policy = 'degraded' for bulk-only analysis.")
             for target in targets:
@@ -71,25 +86,34 @@ class MCPInvestigator:
 
         try:
             if not targets:
+                self._progress("no MCP investigation targets")
                 stats = self.repository.calculate_mcp_stats(sample_id, candidate_count=0)
                 export_mcp_artifacts(self.repository, sample_id, self.workspace, stats)
                 return stats
-            for target in targets:
+            for index, target in enumerate(targets, start=1):
                 existing = self.repository.get_mcp_investigation(sample_id, target.address)
                 if existing and existing["status"] == InvestigationStatus.COMPLETED.value:
+                    self._progress(f"skipping completed investigation {index}/{len(targets)}: {target.address}")
                     continue
                 if self._total_budget_exhausted(sample_id):
+                    self._progress("MCP total tool-call budget exhausted")
                     break
+                self._progress(
+                    f"investigating target {index}/{len(targets)}: "
+                    f"{target.current_name} ({target.address})"
+                )
                 self._investigate_target(sample_id, target, session)
         finally:
             if session_id is not None:
                 self.repository.complete_mcp_session(session_id, status="COMPLETED")
             session.close()
 
+        self._progress("exporting MCP findings")
         stats = self.repository.calculate_mcp_stats(sample_id, candidate_count=len(targets))
         export_mcp_artifacts(self.repository, sample_id, self.workspace, stats)
         ai_stats = self.repository.calculate_ai_stats(sample_id)
         export_ai_artifacts(self.repository, sample_id, self.workspace, ai_stats)
+        self._progress("MCP investigation complete")
         return stats
 
     def _investigate_target(
@@ -128,6 +152,10 @@ class MCPInvestigator:
                 break
 
             round_number = self.repository.next_mcp_round_number(sample_id, target.address)
+            self._progress(
+                f"planning MCP round {round_number} for {target.current_name} "
+                f"({len(plan.actions)} action(s))"
+            )
             round_id = self.repository.create_mcp_round(
                 sample_id,
                 target.address,
@@ -150,6 +178,7 @@ class MCPInvestigator:
                 fingerprint = action.fingerprint()
                 if fingerprint in completed:
                     continue
+                self._progress(f"calling MCP {action.capability.value} for {target.address}")
                 try:
                     result = session.execute(action.capability, action.target, action.parameters)
                 except MCPError as exc:
@@ -250,6 +279,10 @@ class MCPInvestigator:
                 interpretation_changed=False,
                 error=f"Unable to retrieve final AI finding for {original_name}.",
             )
+
+    def _progress(self, message: str) -> None:
+        if self.progress_callback is not None:
+            self.progress_callback(message)
 
     def _persist_target_questions(self, target: InvestigationTarget) -> None:
         questions: list[InvestigationQuestion] = []

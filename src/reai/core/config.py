@@ -38,6 +38,10 @@ class IDAConfig(BaseModel):
     timeout_seconds: int = Field(default=3600, ge=1)
     max_concurrent_instances: int = Field(default=1, ge=1)
     database_extension: str = ".i64"
+    decompile_mode: str = "targeted"
+    decompile_max_functions: int = Field(default=0, ge=0)
+    decompile_batch_size: int = Field(default=25, ge=1)
+    disassembly_max_lines_per_function: int = Field(default=1500, ge=0)
 
     @field_validator("path", mode="before")
     @classmethod
@@ -50,6 +54,24 @@ class IDAConfig(BaseModel):
     @classmethod
     def _validate_database_extension(cls, value: str) -> str:
         return value if value.startswith(".") else f".{value}"
+
+    @field_validator("decompile_mode")
+    @classmethod
+    def _validate_decompile_mode(cls, value: str) -> str:
+        lowered = value.lower().replace("-", "_")
+        aliases = {
+            "target": "targeted",
+            "targets": "targeted",
+            "ai": "targeted",
+            "off": "none",
+            "disabled": "none",
+            "false": "none",
+            "true": "all",
+        }
+        normalized = aliases.get(lowered, lowered)
+        if normalized not in {"all", "targeted", "none"}:
+            raise ValueError("ida.decompile_mode must be one of: all, targeted, none")
+        return normalized
 
 
 class AIConfig(BaseModel):
@@ -296,7 +318,16 @@ def load_config_file(path: Path) -> ApplicationConfig:
         raise ConfigError("Configuration section [ida] must be a table.")
     if simple_ida_path is not None and not ida.get("path"):
         ida["path"] = simple_ida_path
-    allowed_ida = {"path", "timeout_seconds", "max_concurrent_instances", "database_extension"}
+    allowed_ida = {
+        "path",
+        "timeout_seconds",
+        "max_concurrent_instances",
+        "database_extension",
+        "decompile_mode",
+        "decompile_max_functions",
+        "decompile_batch_size",
+        "disassembly_max_lines_per_function",
+    }
     unknown_ida = sorted(set(ida) - allowed_ida)
     if unknown_ida:
         raise ConfigError(f"Unknown [ida] key(s): {', '.join(unknown_ida)}")

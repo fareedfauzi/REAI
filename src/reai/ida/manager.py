@@ -5,7 +5,9 @@ import logging
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
+from typing import Callable
 
 from pydantic import BaseModel, ConfigDict
 
@@ -31,8 +33,9 @@ class IDAAnalysisResult(BaseModel):
 
 
 class IDAManager:
-    def __init__(self, config: IDAConfig) -> None:
+    def __init__(self, config: IDAConfig, *, progress_callback: Callable[[str], None] | None = None) -> None:
         self.config = config
+        self.progress_callback = progress_callback
         self.environment = detect_ida_environment(config)
 
     def ensure_available(self) -> IDAEnvironment:
@@ -55,6 +58,12 @@ class IDAManager:
             LOGGER.info("preserving existing original IDB %s", idb_path)
 
         output_json = workspace.analysis / "ida-extraction.json"
+        status_path = workspace.logs / "ida-status.jsonl"
+        status_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            status_path.unlink(missing_ok=True)
+        except OSError:
+            pass
         script_path = Path(__file__).with_name("scripts") / "extract_ida.py"
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as handle:
             args_path = Path(handle.name)
@@ -64,7 +73,12 @@ class IDAManager:
                     "workspace_root": str(workspace.root.resolve()),
                     "idb_path": str(idb_path.resolve()),
                     "output_json": str(output_json.resolve()),
+                    "status_path": str(status_path.resolve()),
                     "reai_version": __version__,
+                    "decompile_mode": self.config.decompile_mode,
+                    "decompile_max_functions": self.config.decompile_max_functions,
+                    "decompile_batch_size": self.config.decompile_batch_size,
+                    "disassembly_max_lines_per_function": self.config.disassembly_max_lines_per_function,
                 },
                 handle,
             )
@@ -86,8 +100,12 @@ class IDAManager:
                 env=get_clean_ida_environment(),
             )
             try:
-                stdout, stderr = process.communicate(timeout=self.config.timeout_seconds)
-                returncode = process.returncode
+                stdout, stderr, returncode = self._communicate_with_status(
+                    process,
+                    timeout_seconds=self.config.timeout_seconds,
+                    status_path=status_path,
+                    sample_name=sample_path.name,
+                )
             except subprocess.TimeoutExpired as exc:
                 process.kill()
                 process.wait()
@@ -145,6 +163,48 @@ class IDAManager:
         self._cleanup_sample_dir_idb(sample_path, idb_path)
         return IDAAnalysisResult(environment=environment, idb_path=idb_path, bundle=bundle)
 
+    def _communicate_with_status(
+        self,
+        process: subprocess.Popen[str],
+        *,
+        timeout_seconds: int,
+        status_path: Path,
+        sample_name: str,
+    ) -> tuple[str, str, int]:
+        deadline = time.monotonic() + timeout_seconds
+        offset = 0
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(process.args, timeout_seconds)
+            try:
+                stdout, stderr = process.communicate(timeout=min(0.5, remaining))
+                offset = self._emit_ida_status(status_path, offset, sample_name)
+                return stdout, stderr, process.returncode or 0
+            except subprocess.TimeoutExpired:
+                offset = self._emit_ida_status(status_path, offset, sample_name)
+
+    def _emit_ida_status(self, status_path: Path, offset: int, sample_name: str) -> int:
+        if self.progress_callback is None or not status_path.exists():
+            return offset
+        try:
+            with status_path.open("r", encoding="utf-8", errors="replace") as handle:
+                handle.seek(offset)
+                lines = handle.readlines()
+                offset = handle.tell()
+        except OSError:
+            return offset
+
+        for line in lines:
+            try:
+                payload = json.loads(line)
+            except ValueError:
+                continue
+            message = str(payload.get("message") or "").strip()
+            if message:
+                self.progress_callback(f"{sample_name}: Phase 2: {message}")
+        return offset
+
     def _cleanup_sample_dir_idb(self, sample_path: Path, workspace_idb_path: Path) -> None:
         """Removes side-effect IDB and temporary database files IDA created in the sample's directory."""
         if sample_path.suffix.lower() in {".i64", ".idb"}:
@@ -184,4 +244,3 @@ class IDAManager:
                     LOGGER.info("Cleaned up side-effect IDA file: %s", candidate)
                 except OSError as exc:
                     LOGGER.warning("Could not remove side-effect IDA file %s: %s", candidate, exc)
-

@@ -4,6 +4,7 @@ import hashlib
 import json
 import time
 from datetime import datetime, timezone
+from typing import Callable
 from uuid import uuid4
 
 from reai.ai.client import AIClient, create_ai_client
@@ -29,42 +30,64 @@ from reai.utils.retry import RetryClass, classify_exception
 
 
 class BottomUpAIAnalyzer:
-    def __init__(self, config: AIConfig, repository: AnalysisRepository, workspace: WorkspacePaths) -> None:
+    def __init__(
+        self,
+        config: AIConfig,
+        repository: AnalysisRepository,
+        workspace: WorkspacePaths,
+        *,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> None:
         self.config = config
         self.repository = repository
         self.workspace = workspace
+        self.progress_callback = progress_callback
         self.context_builder = FunctionContextBuilder(
             repository,
             workspace,
         )
 
     def run(self, sample_id: str) -> AIAnalysisStats | None:
+        self._progress("creating AI client")
         client = create_ai_client(self.config)
         if client is None:
+            self._progress("AI provider disabled; skipping")
             return None
 
+        self._progress("selecting target functions")
         target_rows = self.repository.list_ai_targets(sample_id)
         target_addresses = select_target_addresses(target_rows, max_functions=self.config.max_functions)
+        self._progress(f"selected {len(target_addresses)} target functions")
         target_by_address = {row["address"]: row for row in target_rows if row["address"] in target_addresses}
+        self._progress("loading call graph order")
         calls = self.repository.list_function_calls(sample_id)
         components = self.repository.list_callgraph_components(sample_id)
         groups = build_bottom_up_groups(target_addresses, calls, components)
         context_truncated = 0
 
+        analyzed_index = 0
         for group in groups:
             for address in group:
+                analyzed_index += 1
                 existing = self.repository.get_function_ai_analysis(sample_id, address)
                 if existing and existing["status"] == "COMPLETED":
+                    self._progress(f"skipping already analyzed function {analyzed_index}/{len(target_addresses)}: {address}")
                     continue
+                function_row = target_by_address[address]
+                self._progress(
+                    f"analyzing function {analyzed_index}/{len(target_addresses)}: "
+                    f"{function_row['name']} ({address})"
+                )
                 context = self.context_builder.build(sample_id, address)
                 if context.context_truncated:
                     context_truncated += 1
-                function_row = target_by_address[address]
                 self._analyze_one(sample_id, function_row, context, client)
 
+        self._progress("exporting AI findings")
         stats = self.repository.calculate_ai_stats(sample_id, target_count=len(target_addresses))
         stats.context_truncated = context_truncated
         export_ai_artifacts(self.repository, sample_id, self.workspace, stats)
+        self._progress("AI function analysis complete")
         return stats
 
     def _analyze_one(self, sample_id: str, function_row: dict, context, client: AIClient) -> None:
@@ -118,6 +141,7 @@ class BottomUpAIAnalyzer:
                 if retry < self.config.max_retries:
                     # Exponential backoff: 2**retry seconds, capped at 64s.
                     backoff = min(64, 2 ** retry)
+                    self._progress(f"retrying {address} after provider error ({retry + 1}/{self.config.max_retries})")
                     time.sleep(backoff)
 
 
@@ -157,6 +181,10 @@ class BottomUpAIAnalyzer:
             context_builder_version=self.config.context_builder_version,
             analysis_fingerprint=fingerprint,
         )
+
+    def _progress(self, message: str) -> None:
+        if self.progress_callback is not None:
+            self.progress_callback(message)
 
 
 def _fingerprint_context(context) -> str:

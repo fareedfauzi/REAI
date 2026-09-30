@@ -87,7 +87,7 @@ class FunctionRecord(HexAddressModel):
     decompilation_status: Literal["not_attempted", "success", "failed", "unavailable"] = "not_attempted"
     decompilation_error: str | None = None
     pseudocode_path: str | None = None
-    disassembly_status: Literal["not_attempted", "success", "failed"] = "not_attempted"
+    disassembly_status: Literal["not_attempted", "success", "failed", "skipped"] = "not_attempted"
     disassembly_path: str | None = None
     scc_id: int | None = None
     recursive: bool = False

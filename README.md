@@ -86,8 +86,8 @@ bash setup.sh
 The setup script will:
 1. Create and activate a Python virtual environment.
 2. Install REAI and its dependencies.
-3. Launch an interactive configuration tool to set your IDA path, AI provider, and API key (`reai.toml`).
-4. Perform a live connection test to verify your API key works.
+3. Launch an interactive configuration tool to set your IDA path, AI provider, and API key (`reai.toml`) only when no existing config is found.
+4. Perform a live connection test to verify your API key works when interactive configuration runs.
 
 After setup, simply activate your environment to use REAI:
 ```bash
@@ -121,6 +121,8 @@ api-key = ""
 ```
 
 Supported providers are `openai`, `anthropic`, `openai-compatible`, `lmstudio`, `ollama`, and `hermes`. Keep real API keys out of source control. If `api-key` is empty or omitted, REAI uses the provider's normal environment variable.
+
+For large IDBs, Phase 2 defaults to targeted Hex-Rays extraction for entry-point, `sub_*`, and callback-like functions instead of eagerly decompiling every function. Use `[ida].decompile_mode = "none"` for the fastest metadata/disassembly pass, or `"all"` with `decompile_max_functions = 0` for full pseudocode extraction.
 
 See [docs/configuration.md](docs/configuration.md) for the full configuration reference.
 
@@ -186,16 +188,17 @@ See [docs/output-structure.md](docs/output-structure.md).
 ## How It Works
 
 ```text
-Sample -> IDA extraction -> call graph -> bottom-up AI analysis
-       -> targeted MCP investigation -> validation -> IDB enrichment
-       -> AI narrative & readable code generation -> report generation
+Sample -> Phase 1 workspace setup -> Phase 2 IDA extraction
+       -> Phase 3 bottom-up AI analysis -> Phase 4 MCP investigation
+       -> Phase 5 validation -> Phase 6 IDB enrichment
+       -> Phase 7 report generation
 ```
 
 REAI targets unnamed `sub_*` functions and avoids overwriting meaningful names unless validated policy marks a change as eligible. Calibrated confidence controls whether a finding becomes an IDB change. Low-confidence or contradictory findings are preserved for review rather than forced into the IDB.
 
 REAI performs a bottom-up first-pass analysis of IDA functions and uses targeted MCP queries to investigate important or unresolved behavior. It can inspect callers, callees, cross-references, pseudocode, disassembly, data and other IDA context to refine function findings before generating an enriched IDB and malware-analysis report.
 
-Details:
+Detailed phase reference:
 
 - [docs/analysis-pipeline.md](docs/analysis-pipeline.md)
 

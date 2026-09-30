@@ -16,7 +16,7 @@ From a fresh checkout, run the setup script for your platform:
 bash setup.sh
 ```
 
-The script will automatically create a virtual environment, install REAI, launch an interactive configuration tool to write `reai.toml`, and test your AI API key.
+The script will automatically create a virtual environment and install REAI. If no existing config is found, it launches an interactive configuration tool to write `reai.toml` and test your AI API key.
 
 Once complete, activate your environment to use the `reai` CLI:
 

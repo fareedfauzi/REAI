@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from typing import Callable
 
 from reai.analysis.artifacts import validate_artifacts
 from reai.analysis.export import export_validated_analysis
@@ -19,20 +20,33 @@ from reai.utils.paths import WorkspacePaths
 
 
 class MalwareUnderstandingEngine:
-    def __init__(self, config: AnalysisConfig, repository: AnalysisRepository, workspace: WorkspacePaths) -> None:
+    def __init__(
+        self,
+        config: AnalysisConfig,
+        repository: AnalysisRepository,
+        workspace: WorkspacePaths,
+        *,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> None:
         self.config = config
         self.repository = repository
         self.workspace = workspace
+        self.progress_callback = progress_callback
 
     def run(self, sample_id: str) -> SemanticAnalysisStats | None:
         if not self.config.enabled:
             return None
+        self._progress("loading current function findings")
         findings = load_current_function_findings(self.repository, sample_id)
         if not findings:
+            self._progress("no function findings to validate")
             return None
 
+        self._progress("building semantic relationships")
         relationships = build_semantic_relationships(self.repository, sample_id)
+        self._progress("discovering subsystems and capabilities")
         subsystems, capabilities = discover_subsystems(self.repository, sample_id, findings)
+        self._progress("propagating context across functions")
         propagated_findings, propagation_passes = run_context_propagation(
             self.repository,
             sample_id,
@@ -43,14 +57,20 @@ class MalwareUnderstandingEngine:
             minimum_confidence_delta=self.config.propagation.minimum_confidence_delta,
         )
         # Recluster after propagation because parent semantics may have improved.
+        self._progress("reclustering subsystems after propagation")
         subsystems, capabilities = discover_subsystems(self.repository, sample_id, propagated_findings)
+        self._progress("validating strings, artifacts, and IOCs")
         extracted_strings = self.repository.list_strings_with_xrefs(sample_id)
         artifacts = validate_artifacts(propagated_findings, extracted_strings)
+        self._progress("recovering structures and types")
         structures = recover_structures(propagated_findings)
+        self._progress("building execution and data flows")
         execution_flows = build_execution_flows(self.repository, sample_id, propagated_findings, subsystems)
         data_flows = build_data_flows(artifacts)
+        self._progress("identifying command handlers and configuration items")
         command_handlers = build_command_handlers(self.repository, sample_id, propagated_findings)
         configuration_items = build_configuration_items(artifacts)
+        self._progress("validating semantic model and IDB change candidates")
         validation_results, change_candidates, contradictions = validate_semantics(
             propagated_findings,
             structures,
@@ -100,9 +120,15 @@ class MalwareUnderstandingEngine:
             propagation_passes=propagation_passes,
             stats=stats,
         )
+        self._progress("persisting validated malware understanding")
         self.repository.persist_validated_analysis(sample_id, model)
         export_validated_analysis(self.workspace, model)
+        self._progress("semantic validation complete")
         return stats
+
+    def _progress(self, message: str) -> None:
+        if self.progress_callback is not None:
+            self.progress_callback(message)
 
 
 def _phase5_fingerprint(findings, relationships, artifacts, schema_version: str, taxonomy_version: str) -> str:

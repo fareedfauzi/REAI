@@ -9,7 +9,7 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from reai import __version__
 from reai.core.config import EnrichmentConfig, IDAConfig
@@ -33,16 +33,20 @@ class IDBEnricher:
         ida_config: IDAConfig,
         repository: AnalysisRepository,
         workspace: WorkspacePaths,
+        *,
+        progress_callback: Callable[[str], None] | None = None,
     ) -> None:
         self.config = config
         self.ida_config = ida_config
         self.repository = repository
         self.workspace = workspace
+        self.progress_callback = progress_callback
 
     def run(self, sample: Sample) -> EnrichmentStats | None:
         if not self.config.enabled:
             return None
 
+        self._progress("loading validated IDB change candidates")
         original_idb = self.workspace.ida / f"original{self.ida_config.database_extension}"
         analyzed_idb = self.workspace.ida / f"analyzed{self.ida_config.database_extension}"
         temp_idb = self.workspace.ida / f".analyzed_tmp{self.ida_config.database_extension}"
@@ -52,6 +56,7 @@ class IDBEnricher:
 
         source_fingerprint = self.repository.get_validated_analysis_fingerprint(sample.sample_id)
         candidates = self._load_candidates(sample.sample_id)
+        self._progress(f"preparing {len(candidates)} IDB change candidates")
         assign_unique_names(candidates)
 
         run = EnrichmentRun(
@@ -76,6 +81,7 @@ class IDBEnricher:
         original_hash = _sha256_file(original_idb)
         verifications: list[IDBVerification] = []
         try:
+            self._progress("copying original IDB to analyzed workspace")
             temp_idb.unlink(missing_ok=True)
             shutil.copy2(original_idb, temp_idb)
             if _sidecar_path(original_idb).exists():
@@ -83,20 +89,25 @@ class IDBEnricher:
             LOGGER.info("copied original IDB to enrichment temp %s", temp_idb)
 
             if run.mode == "ida":
+                self._progress("applying changes with IDA backend")
                 verifications = self._apply_ida_backend(temp_idb, candidates)
             else:
+                self._progress("writing manifest enrichment output")
                 verifications = self._apply_manifest_backend(sample.sample_id, temp_idb, candidates)
 
+            self._progress("verifying original IDB remained unchanged")
             if _sha256_file(original_idb) != original_hash:
                 raise EnrichmentError("Baseline IDB changed during enrichment; refusing to finalize.")
 
+            self._progress("saving analyzed IDB")
             _atomic_replace(temp_idb, analyzed_idb)
             if _sidecar_path(temp_idb).exists():
                 _atomic_replace(_sidecar_path(temp_idb), _sidecar_path(analyzed_idb))
 
-
+            self._progress("persisting enrichment results")
             stats = self._finish_run(sample.sample_id, run, candidates, verifications, None)
             export_changes(self.workspace, self.repository, sample.sample_id, run, stats)
+            self._progress("IDB enrichment complete")
             LOGGER.info("IDB enrichment complete analyzed=%s", analyzed_idb)
             return stats
         except Exception as exc:
@@ -131,6 +142,10 @@ class IDBEnricher:
         if self.config.allow_manifest_fallback:
             return "manifest"
         raise EnrichmentError("No IDA executable is available and manifest fallback is disabled.")
+
+    def _progress(self, message: str) -> None:
+        if self.progress_callback is not None:
+            self.progress_callback(message)
 
     def _apply_ida_backend(self, temp_idb: Path, changes: list[EnrichmentChange]) -> list[IDBVerification]:
         environment = detect_ida_environment(self.ida_config)

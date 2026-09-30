@@ -16,8 +16,8 @@ from reai.cli.console import console
 
 
 PHASE_TITLES: dict[int, str] = {
-    1: "initializing workspace",
-    2: "running IDA extraction",
+    1: "discovering sample and preparing workspace",
+    2: "waiting for IDA auto-analysis",
     3: "running bottom-up AI function analysis",
     4: "running REAI MCP investigation",
     5: "validating malware understanding",
@@ -53,8 +53,9 @@ class PhaseProgress:
     def __init__(self, initial_message: str = "Starting REAI analysis...") -> None:
         self.sample_name: str | None = None
         self.current_message = initial_message
-        self.lines = {phase: PhaseLine(detail) for phase, detail in PHASE_TITLES.items()}
-        self.active_phase: int | None = None
+        self.lines = {phase: PhaseLine(detail=detail) for phase, detail in PHASE_TITLES.items()}
+        self.active_phase: int | None = 1
+        self.lines[1].status = "running"
 
     def update(self, message: str) -> None:
         self.current_message = message
@@ -63,6 +64,12 @@ class PhaseProgress:
             sample = _sample_from_message(message)
             if sample:
                 self.sample_name = sample
+            phase1_detail = _phase1_detail_from_message(message)
+            if phase1_detail:
+                self.lines[1].detail = phase1_detail
+                if self.lines[1].status != "done":
+                    self.lines[1].status = "running"
+                    self.active_phase = 1
             return
 
         sample = match.group("sample")
@@ -121,7 +128,7 @@ def _render_phase_line(phase: int, line: PhaseLine, *, running: bool) -> Text | 
     if line.status == "failed":
         return Text.from_markup(f"[red]{FAIL_SYMBOL}[/red]  Phase {phase}: {detail}")
     if running:
-        return Group(Spinner(SPINNER_NAME, text=Text.from_markup(f" Phase {phase}: {detail}")))
+        return Spinner(SPINNER_NAME, text=Text.from_markup(f" Phase {phase}: {detail}"))
     return Text.from_markup(f"[dim]{PENDING_SYMBOL}  Phase {phase}: {detail}[/dim]")
 
 
@@ -140,3 +147,20 @@ def _sample_from_message(message: str) -> str | None:
         return None
     sample, _ = message.split(": ", 1)
     return sample or None
+
+
+def _phase1_detail_from_message(message: str) -> str | None:
+    lowered = message.lower()
+    if lowered.startswith("starting reai analysis"):
+        return "starting analysis"
+    if lowered == "discovering input samples":
+        return "discovering input samples"
+    if lowered.startswith("hashing "):
+        return "hashing sample identity"
+    if ": checking workspace" in lowered:
+        return "checking existing workspace"
+    if ": resuming existing workspace" in lowered:
+        return "resuming existing workspace"
+    if ": creating workspace" in lowered:
+        return "creating workspace and database"
+    return None

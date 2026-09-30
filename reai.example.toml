@@ -1,5 +1,16 @@
 [ida]
 path = "C:/Program Files/IDA Professional 9.3"
+# Phase 2 speed/coverage tradeoff:
+# targeted = batch-decompile entry-point, sub_*, and callback-like functions only.
+# all = decompile every function, none = skip Hex-Rays and use disassembly for targets.
+decompile_mode = "targeted"
+# 0 means unlimited. Targeted mode is unlimited by default so Phase 3 can use pseudocode.
+decompile_max_functions = 0
+# Functions per Hex-Rays batch. This does not limit total coverage.
+decompile_batch_size = 25
+# Used only if batch decompilation fails and REAI emits fallback assembly.
+# 0 means unlimited.
+disassembly_max_lines_per_function = 1500
 
 [ai]
 # openai, anthropic, openai-compatible, lmstudio, ollama, or hermes

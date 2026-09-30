@@ -5,10 +5,20 @@ from collections import defaultdict, deque
 
 
 def select_target_addresses(target_rows: list[dict], *, max_functions: int | None = None) -> list[str]:
-    addresses = [row["address"] for row in sorted(target_rows, key=lambda item: item["address"])]
+    rows = sorted(target_rows, key=_target_sort_key)
+    addresses = [row["address"] for row in rows]
     if max_functions is not None:
         return addresses[:max_functions]
     return addresses
+
+
+def _target_sort_key(row: dict) -> tuple[int, int | str]:
+    has_pseudocode = row.get("decompilation_status") == "success" and bool(row.get("pseudocode_path"))
+    try:
+        address: int | str = int(str(row["address"]), 16)
+    except (KeyError, TypeError, ValueError):
+        address = str(row.get("address") or "")
+    return (0 if has_pseudocode else 1, address)
 
 
 def build_bottom_up_groups(

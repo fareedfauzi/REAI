@@ -48,20 +48,20 @@ STATE_PROGRESS_MESSAGES: dict[SampleState, str] = {
     SampleState.DISCOVERED: "Phase 1: sample discovered",
     SampleState.INITIALIZING: "Phase 1: creating workspace and database",
     SampleState.INITIALIZED: "Phase 1: initialization complete",
-    SampleState.IDA_ANALYSIS: "Phase 2: running IDA auto-analysis",
-    SampleState.EXTRACTING: "Phase 2: persisting bulk extraction",
-    SampleState.GRAPH_BUILDING: "Phase 2: building call graph metadata",
+    SampleState.IDA_ANALYSIS: "Phase 2: waiting for IDA auto-analysis",
+    SampleState.EXTRACTING: "Phase 2: persisting extracted artifacts",
+    SampleState.GRAPH_BUILDING: "Phase 2: building call graph and recursion metadata",
     SampleState.READY_FOR_ANALYSIS: "Phase 2: deterministic extraction complete",
-    SampleState.ANALYZING: "Phase 3: running bottom-up AI function analysis",
-    SampleState.AI_ANALYZED: "Phase 3: AI analysis complete",
-    SampleState.INVESTIGATING: "Phase 4: running autonomous MCP investigation",
-    SampleState.MCP_INVESTIGATED: "Phase 4: MCP investigation complete",
-    SampleState.PROPAGATING: "Phase 5: propagating semantic context",
-    SampleState.VALIDATING: "Phase 5: validating malware understanding",
+    SampleState.ANALYZING: "Phase 3: analyzing target functions bottom-up with AI",
+    SampleState.AI_ANALYZED: "Phase 3: AI function findings saved",
+    SampleState.INVESTIGATING: "Phase 4: investigating uncertain functions with read-only MCP tools",
+    SampleState.MCP_INVESTIGATED: "Phase 4: MCP evidence and refinements saved",
+    SampleState.PROPAGATING: "Phase 5: propagating context across functions and artifacts",
+    SampleState.VALIDATING: "Phase 5: validating names, behaviors, IOCs, and IDB change candidates",
     SampleState.VALIDATED: "Phase 5: semantic validation complete",
-    SampleState.ENRICHING: "Phase 6: enriching the IDB",
-    SampleState.ENRICHED: "Phase 6: IDB enrichment complete",
-    SampleState.REPORTING: "Phase 7: generating evidence-backed report",
+    SampleState.ENRICHING: "Phase 6: applying validated renames and comments to analyzed IDB",
+    SampleState.ENRICHED: "Phase 6: IDB enrichment verified",
+    SampleState.REPORTING: "Phase 7: writing evidence-backed Markdown, HTML, and PDF reports",
     SampleState.COMPLETE: "Phase 7: analysis complete",
     SampleState.FAILED_IDA: "Phase 2: IDA analysis failed",
     SampleState.FAILED_EXTRACTION: "Phase 2: extraction failed",
@@ -203,6 +203,12 @@ class AnalysisOrchestrator:
     def _progress_sample_state(self, filename: str, state: SampleState) -> None:
         label = STATE_PROGRESS_MESSAGES.get(state, state.value)
         self._progress(f"{filename}: {label}")
+
+    def _sample_phase_progress(self, item: SampleResult, phase: int) -> ProgressCallback:
+        def progress(detail: str) -> None:
+            self._progress(f"{item.sample.filename}: Phase {phase}: {detail}")
+
+        return progress
 
     def _run_sample_pipeline(self, item: SampleResult) -> None:
         attempts = self.config.reliability.sample_retry_limit + 1
@@ -521,7 +527,7 @@ class AnalysisOrchestrator:
                 SampleState.IDA_ANALYSIS,
                 message="Starting IDA auto-analysis.",
             )
-            ida_manager = IDAManager(self.config.ida)
+            ida_manager = IDAManager(self.config.ida, progress_callback=self._progress)
             ida_result = ida_manager.analyze(item.sample.source_path, item.workspace)
 
             LOGGER.info("state transition %s", SampleState.EXTRACTING)
@@ -605,7 +611,12 @@ class AnalysisOrchestrator:
                 SampleState.PROPAGATING,
                 message="Starting Phase 5 multi-pass context propagation.",
             )
-            engine = MalwareUnderstandingEngine(self.config.analysis, repository, item.workspace)
+            engine = MalwareUnderstandingEngine(
+                self.config.analysis,
+                repository,
+                item.workspace,
+                progress_callback=self._sample_phase_progress(item, 5),
+            )
             stats = engine.run(item.sample.sample_id)
             if stats is None:
                 return
@@ -669,7 +680,13 @@ class AnalysisOrchestrator:
                 SampleState.ENRICHING,
                 message="Starting Phase 6 IDB enrichment.",
             )
-            enricher = IDBEnricher(self.config.enrichment, self.config.ida, repository, item.workspace)
+            enricher = IDBEnricher(
+                self.config.enrichment,
+                self.config.ida,
+                repository,
+                item.workspace,
+                progress_callback=self._sample_phase_progress(item, 6),
+            )
             stats = enricher.run(item.sample)
             if stats is None:
                 return
@@ -717,7 +734,12 @@ class AnalysisOrchestrator:
                 SampleState.REPORTING,
                 message="Starting Phase 7 evidence-backed report generation.",
             )
-            generator = ReportGenerator(self.config.report, repository, item.workspace)
+            generator = ReportGenerator(
+                self.config.report,
+                repository,
+                item.workspace,
+                progress_callback=self._sample_phase_progress(item, 7),
+            )
             stats = generator.run(item.sample)
             if stats is None:
                 return
@@ -763,7 +785,12 @@ class AnalysisOrchestrator:
                 SampleState.ANALYZING,
                 message="Starting Phase 3 bottom-up AI function analysis.",
             )
-            analyzer = BottomUpAIAnalyzer(self.config.ai, repository, item.workspace)
+            analyzer = BottomUpAIAnalyzer(
+                self.config.ai,
+                repository,
+                item.workspace,
+                progress_callback=self._sample_phase_progress(item, 3),
+            )
             stats = analyzer.run(item.sample.sample_id)
             if stats is None:
                 return
@@ -815,7 +842,12 @@ class AnalysisOrchestrator:
                 SampleState.INVESTIGATING,
                 message="Starting Phase 4 autonomous MCP investigation.",
             )
-            investigator = MCPInvestigator(self.config.mcp, repository, item.workspace)
+            investigator = MCPInvestigator(
+                self.config.mcp,
+                repository,
+                item.workspace,
+                progress_callback=self._sample_phase_progress(item, 4),
+            )
             stats = investigator.run(item.sample.sample_id)
             if stats is None:
                 return

@@ -6,6 +6,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from reai.utils.code_artifacts import extract_consolidated_c_function, is_consolidated_pseudocode_path
+
 from reai import __version__
 
 
@@ -152,6 +154,8 @@ class ArtifactQueryEngine:
             return _content([])
         rel_path = record.get(path_key)
         text = self._read_workspace_text(rel_path)
+        if text and path_key == "pseudocode_path" and is_consolidated_pseudocode_path(rel_path):
+            text = extract_consolidated_c_function(text, record.get("name")) or ""
         if not text:
             status_key = "decompilation_status" if path_key == "pseudocode_path" else "disassembly_status"
             text = f"{obs_type} unavailable: {record.get(status_key) or 'missing artifact'}"

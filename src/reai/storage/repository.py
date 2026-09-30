@@ -243,7 +243,7 @@ class AnalysisRepository:
             )
 
     def persist_extraction(self, sample_id: str, bundle: ExtractionBundle) -> None:
-        payload = bundle.model_dump(mode="json")
+        metadata_payload = bundle.metadata.model_dump(mode="json")
         with self._connect() as connection:
             self._clear_extraction(connection, sample_id)
             metadata = bundle.metadata
@@ -256,7 +256,7 @@ class AnalysisRepository:
                 """,
                 (
                     sample_id,
-                    json.dumps(payload["metadata"], sort_keys=True),
+                    json.dumps(metadata_payload, sort_keys=True),
                     metadata.ida_version,
                     metadata.architecture,
                     metadata.bitness,
@@ -558,7 +558,11 @@ class AnalysisRepository:
         entry_names = {"main", "_main", "wmain", "_wmain", "winmain", "_winmain@16", "wwinmain", "_wwinmain@16", "start", "_start"}
         return [
             dict(row) for row in rows
-            if is_ida_placeholder_name(row["name"]) or (row["name"] and row["name"].lower() in entry_names)
+            if (
+                row["decompilation_status"] == "success"
+                or is_ida_placeholder_name(row["name"])
+                or (row["name"] and row["name"].lower() in entry_names)
+            )
         ]
 
     def list_strings(self, sample_id: str) -> list[dict]:

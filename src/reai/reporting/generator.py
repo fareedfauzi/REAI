@@ -5,6 +5,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timezone
+from typing import Callable
 
 from reai.core.config import ReportConfig
 from reai.core.exceptions import ReportError
@@ -23,10 +24,18 @@ LOGGER = logging.getLogger("reai.reporting")
 
 
 class ReportGenerator:
-    def __init__(self, config: ReportConfig, repository: AnalysisRepository, workspace: WorkspacePaths) -> None:
+    def __init__(
+        self,
+        config: ReportConfig,
+        repository: AnalysisRepository,
+        workspace: WorkspacePaths,
+        *,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> None:
         self.config = config
         self.repository = repository
         self.workspace = workspace
+        self.progress_callback = progress_callback
 
     def run(self, sample: Sample) -> ReportStats | None:
         if not self.config.enabled:
@@ -37,14 +46,20 @@ class ReportGenerator:
             from reai.analysis.ai_narrative import generate_ai_narrative
             from reai.analysis.ai_rewrite import generate_ai_readable_code
             
+            self._progress("generating AI narrative")
             generate_ai_narrative(sample.sample_id, self.workspace.root)
+            self._progress("generating readable code appendix")
             generate_ai_readable_code(sample.sample_id, self.workspace.root)
         except Exception as e:
             LOGGER.error(f"Failed to generate AI content: {e}")
             raise
+        self._progress("synthesizing report model")
         model = synthesize_report_model(self.config, self.repository, self.workspace, sample.sample_id)
+        self._progress("writing report findings")
         write_report_findings(self.workspace, model)
+        self._progress("building report sections")
         sections = _build_legacy_sections(model)
+        self._progress("validating report model")
         model_failures = validate_report_model(model)
 
         stats = ReportStats(
@@ -75,8 +90,10 @@ class ReportGenerator:
         try:
             self.repository.persist_report_sections(sample.sample_id, run.run_id, sections)
             model_path = self.workspace.analysis / "report_model.json"
+            self._progress("writing report model JSON")
             atomic_write_text(model_path, json.dumps(model.model_dump(mode="json"), indent=2, sort_keys=True) + "\n")
 
+            self._progress("rendering Markdown report")
             markdown = render_markdown_v2(model)
             markdown_failures = validate_markdown(markdown, model)
             failures = model_failures + markdown_failures
@@ -88,11 +105,13 @@ class ReportGenerator:
                 run.markdown_path = str(markdown_path)
                 run.stats.markdown_generated = True
             if "html" in self.config.formats:
+                self._progress("rendering HTML report")
                 html_path = self.workspace.report / "report.html"
                 atomic_write_text(html_path, render_html_v2(model))
                 run.html_path = str(html_path)
                 run.stats.html_generated = True
             if "pdf" in self.config.formats:
+                self._progress("rendering PDF report")
                 pdf_path = self.workspace.report / "report.pdf"
                 render_pdf_v2(markdown, model, pdf_path)
                 run.pdf_path = str(pdf_path)
@@ -102,6 +121,7 @@ class ReportGenerator:
             run.error = "; ".join(failures) if failures else None
             run.completed_at = _now()
             self.repository.update_report_run(run)
+            self._progress("report generation complete")
             LOGGER.info("report generation complete markdown=%s html=%s pdf=%s", run.markdown_path, run.html_path, run.pdf_path)
             return run.stats
         except Exception as exc:
@@ -112,6 +132,10 @@ class ReportGenerator:
             if isinstance(exc, ReportError):
                 raise
             raise ReportError(f"Report generation failed: {exc}") from exc
+
+    def _progress(self, message: str) -> None:
+        if self.progress_callback is not None:
+            self.progress_callback(message)
 
 
 def _build_legacy_sections(model: ReportModelV2) -> list[ReportSection]:

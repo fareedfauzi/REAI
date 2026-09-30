@@ -17,13 +17,21 @@ echo "[REAI Setup] Running REAI help to verify installation..."
 python3 -m reai --help || { echo "[!] REAI installation failed or could not be run."; exit 1; }
 
 echo ""
-echo "[REAI Setup] Launching interactive configuration..."
-python3 scripts/setup_config.py || {
-    echo ""
-    echo "[!] Setup encountered an error during API testing."
-    echo "[!] Exiting setup. Fix the errors in reai.toml and try again."
-    exit 1
-}
+if [ -n "${REAI_CONFIG:-}" ] && [ -f "$REAI_CONFIG" ]; then
+    echo "[REAI Setup] Existing config detected via REAI_CONFIG: $REAI_CONFIG"
+    echo "[REAI Setup] Skipping interactive configuration."
+elif [ -f "reai.toml" ]; then
+    echo "[REAI Setup] Existing reai.toml detected."
+    echo "[REAI Setup] Skipping interactive configuration."
+else
+    echo "[REAI Setup] Launching interactive configuration..."
+    python3 scripts/setup_config.py || {
+        echo ""
+        echo "[!] Setup encountered an error during API testing."
+        echo "[!] Exiting setup. Fix the errors in reai.toml and try again."
+        exit 1
+    }
+fi
 
 echo ""
 echo "======================================================================"

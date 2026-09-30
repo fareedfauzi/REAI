@@ -37,6 +37,63 @@ def safe_call(default, func, *args):
         return default
 
 
+def report_status(args, message):
+    path = args.get("status_path")
+    if not path:
+        return
+    try:
+        with Path(path).open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"timestamp": utc_now(), "message": message}) + "\n")
+    except Exception:
+        pass
+
+
+def is_ida_placeholder_name(name):
+    lowered = (name or "").lower()
+    return lowered.startswith("sub_") or lowered.startswith("nullsub_") or lowered.startswith("j_sub_")
+
+
+def is_callback_name(name):
+    lowered = (name or "").lower()
+    callback_terms = (
+        "callback",
+        "cb_",
+        "_cb",
+        "wndproc",
+        "dlgproc",
+        "enumproc",
+        "hookproc",
+        "timerproc",
+        "threadproc",
+        "fiberproc",
+        "windowproc",
+    )
+    return any(term in lowered for term in callback_terms)
+
+
+def analysis_target_reason(record, entry_functions, callback_functions):
+    if record["is_thunk"] or record["is_library"] or record["is_external"]:
+        return None
+    address = record["address"]
+    if address in entry_functions:
+        return "entry"
+    if address in callback_functions or is_callback_name(record["name"]):
+        return "callback"
+    if is_ida_placeholder_name(record["name"]):
+        return "sub"
+    return None
+
+
+def decompile_target_reason(record, decompile_mode, entry_functions, callback_functions):
+    if decompile_mode == "none":
+        return None
+    if decompile_mode == "all":
+        if record["is_thunk"] or record["is_library"] or record["is_external"]:
+            return None
+        return "all"
+    return analysis_target_reason(record, entry_functions, callback_functions)
+
+
 def segment_name(ea):
     import ida_segment
 
@@ -51,6 +108,104 @@ def source_function(ea):
 
     func = ida_funcs.get_func(ea)
     return int(func.start_ea) if func else None
+
+
+def collect_entry_function_addresses():
+    import ida_entry
+    import ida_funcs
+    import ida_idaapi
+
+    addresses = set()
+    for index in range(safe_call(0, ida_entry.get_entry_qty)):
+        ordinal = ida_entry.get_entry_ordinal(index)
+        ea = ida_entry.get_entry(ordinal)
+        if ea == ida_idaapi.BADADDR:
+            continue
+        func = ida_funcs.get_func(ea)
+        addresses.add(int(func.start_ea if func else ea))
+    return addresses
+
+
+def collect_callback_function_addresses(function_starts):
+    import idautils
+
+    callbacks = set()
+    for start in function_starts:
+        refs = list(safe_call([], lambda ea: list(idautils.DataRefsTo(ea)), start) or [])
+        if refs:
+            callbacks.add(int(start))
+    return callbacks
+
+
+def batch_decompile_targets(ida_hexrays, ida_pro, pseudocode_dir, target_addresses, args):
+    if not target_addresses:
+        return {}, {}
+    if not hasattr(ida_hexrays, "decompile_many"):
+        reason = "ida_hexrays.decompile_many is unavailable"
+        return {}, {int(address): reason for address in target_addresses}
+
+    batch_size = max(1, int(args.get("decompile_batch_size") or 25))
+    results = {}
+    failures = {}
+    total = len(target_addresses)
+
+    flags = 0
+    for name in ("VDRUN_NEWFILE", "VDRUN_SILENT", "VDRUN_CMDLINE"):
+        flags |= int(getattr(ida_hexrays, name, 0))
+
+    for chunk_index, offset in enumerate(range(0, total, batch_size), start=1):
+        chunk = [int(address) for address in target_addresses[offset : offset + batch_size]]
+        start_number = offset + 1
+        end_number = offset + len(chunk)
+        output_path = pseudocode_dir / f"decompiled_{chunk_index:04d}.c"
+        try:
+            output_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+        report_status(args, f"batch decompiling functions {start_number}-{end_number}/{total}")
+        addresses = ida_pro.uint64vec_t()
+        for address in chunk:
+            addresses.push_back(address)
+
+        ok = safe_call(False, ida_hexrays.decompile_many, str(output_path), addresses, flags)
+        if not ok:
+            reason = "ida_hexrays.decompile_many returned false"
+            failures.update({address: reason for address in chunk})
+            report_status(args, f"decompile chunk {chunk_index} failed")
+            continue
+        if not output_path.exists() or output_path.stat().st_size == 0:
+            reason = "ida_hexrays.decompile_many produced no output"
+            failures.update({address: reason for address in chunk})
+            report_status(args, f"decompile chunk {chunk_index} produced no output")
+            continue
+
+        rel_path = str(Path("Extracted Codes") / "pseudocode" / output_path.name)
+        for address in chunk:
+            results[address] = rel_path
+        report_status(args, f"finished decompile chunk {chunk_index}/{(total + batch_size - 1) // batch_size}")
+
+    return results, failures
+
+
+def write_disassembly_artifact(record, disassembly_dir, max_disassembly_lines):
+    import ida_lines
+    import idautils
+
+    dis_lines = []
+    for head in idautils.Heads(record["address"], record["end_address"]):
+        if max_disassembly_lines and len(dis_lines) >= max_disassembly_lines:
+            break
+        text = safe_call("", ida_lines.generate_disasm_line, head, 0) or ""
+        text = ida_lines.tag_remove(text)
+        if text:
+            dis_lines.append(f"{int(head):016x}: {text}")
+    if max_disassembly_lines and len(dis_lines) >= max_disassembly_lines:
+        dis_lines.append(f"; [TRUNCATED after {max_disassembly_lines} disassembly lines]")
+    dis_name = artifact_filename(int(record["address"]), record["name"], "asm")
+    (disassembly_dir / dis_name).write_text("\n".join(dis_lines) + "\n", encoding="utf-8", errors="replace")
+    record["disassembly_status"] = "success"
+    record["disassembly_path"] = str(Path("Extracted Codes") / "disassembly" / dis_name)
 
 
 def collect_metadata(args):
@@ -191,15 +346,12 @@ def collect_strings():
     return records
 
 
-def collect_functions(imports_by_address, strings_by_address, workspace_root):
-    import ida_bytes
+def collect_functions(imports_by_address, strings_by_address, workspace_root, args):
     import ida_funcs
     import ida_hexrays
-    import ida_idaapi
-    import ida_lines
     import ida_name
+    import ida_pro
     import ida_typeinf
-    import ida_xref
     import idautils
 
     functions = {}
@@ -211,8 +363,27 @@ def collect_functions(imports_by_address, strings_by_address, workspace_root):
     pseudocode_dir.mkdir(parents=True, exist_ok=True)
     disassembly_dir.mkdir(parents=True, exist_ok=True)
     hexrays_available = bool(safe_call(False, ida_hexrays.init_hexrays_plugin))
+    decompile_mode = str(args.get("decompile_mode") or "targeted").lower().replace("-", "_")
+    if decompile_mode in {"target", "targets", "ai"}:
+        decompile_mode = "targeted"
+    elif decompile_mode in {"off", "disabled", "false"}:
+        decompile_mode = "none"
+    elif decompile_mode == "true":
+        decompile_mode = "all"
+    if decompile_mode not in {"all", "targeted", "none"}:
+        decompile_mode = "targeted"
+    max_decompiled = int(args.get("decompile_max_functions") or 0)
+    max_disassembly_lines = int(args.get("disassembly_max_lines_per_function") or 0)
+    function_starts = [int(start) for start in idautils.Functions()]
+    report_status(args, f"enumerating {len(function_starts)} functions and references")
+    entry_functions = collect_entry_function_addresses()
+    callback_functions = collect_callback_function_addresses(function_starts)
+    decompile_attempts = 0
+    decompile_targets = []
+    decompile_target_set = set()
+    analysis_target_set = set()
 
-    for start in idautils.Functions():
+    for start in function_starts:
         func = ida_funcs.get_func(start)
         if not func:
             continue
@@ -243,40 +414,17 @@ def collect_functions(imports_by_address, strings_by_address, workspace_root):
             "recursive": False,
         }
 
-        if hexrays_available:
-            try:
-                cfunc = ida_hexrays.decompile(func.start_ea)
-                pseudo_lines = [ida_lines.tag_remove(line.line) for line in cfunc.get_pseudocode()]
-                pseudo_name = artifact_filename(int(func.start_ea), name, "c")
-                (pseudocode_dir / pseudo_name).write_text(
-                    "\n".join(pseudo_lines) + "\n",
-                    encoding="utf-8",
-                    errors="replace",
-                )
-                record["decompilation_status"] = "success"
-                record["pseudocode_path"] = str(Path("Extracted Codes") / "pseudocode" / pseudo_name)
-            except Exception as exc:
-                record["decompilation_status"] = "failed"
-                record["decompilation_error"] = str(exc)
-                failures.append(
-                    {
-                        "extractor": "pseudocode",
-                        "address": int(func.start_ea),
-                        "name": name,
-                        "reason": str(exc),
-                        "fatal": False,
-                    }
-                )
+        analysis_reason = analysis_target_reason(record, entry_functions, callback_functions)
+        if analysis_reason:
+            analysis_target_set.add(int(func.start_ea))
+        decompile_reason = decompile_target_reason(record, decompile_mode, entry_functions, callback_functions)
+        total_cap_reached = bool(max_decompiled and decompile_attempts >= max_decompiled)
+        if hexrays_available and decompile_reason and not total_cap_reached:
+            decompile_attempts += 1
+            decompile_targets.append(int(func.start_ea))
+            decompile_target_set.add(int(func.start_ea))
 
-        needs_disassembly = record["decompilation_status"] != "success"
-        dis_lines = []
         for head in idautils.Heads(func.start_ea, func.end_ea):
-            if needs_disassembly:
-                text = safe_call("", ida_lines.generate_disasm_line, head, 0) or ""
-                text = ida_lines.tag_remove(text)
-                if text:
-                    dis_lines.append(f"{int(head):016x}: {text}")
-
             for callee in idautils.CodeRefsFrom(head, 0):
                 callee_func = ida_funcs.get_func(callee)
                 if callee_func:
@@ -316,18 +464,69 @@ def collect_functions(imports_by_address, strings_by_address, workspace_root):
                         }
                     )
 
-        if needs_disassembly:
-            dis_name = artifact_filename(int(func.start_ea), name, "asm")
-            (disassembly_dir / dis_name).write_text("\n".join(dis_lines) + "\n", encoding="utf-8", errors="replace")
-            record["disassembly_status"] = "success"
-            record["disassembly_path"] = str(Path("Extracted Codes") / "disassembly" / dis_name)
-        else:
-            record["disassembly_status"] = "skipped"
-
         record["callees"] = sorted(set(record["callees"]))
         record["string_refs"] = sorted(set(record["string_refs"]))
         record["import_refs"] = sorted(set(record["import_refs"]))
         functions[int(func.start_ea)] = record
+
+    decompile_targets.sort(key=lambda address: functions.get(address, {}).get("size", 0))
+
+    if decompile_targets:
+        batch_size = max(1, int(args.get("decompile_batch_size") or 25))
+        report_status(args, f"batch decompiling {len(decompile_targets)} targeted functions in chunks of {batch_size}")
+    else:
+        if decompile_mode == "none":
+            report_status(args, "skipping Hex-Rays decompilation by config")
+        else:
+            report_status(args, "skipping Hex-Rays batch decompilation; no targeted functions")
+    pseudocode_paths, decompile_failures = batch_decompile_targets(ida_hexrays, ida_pro, pseudocode_dir, decompile_targets, args)
+    if decompile_targets:
+        if pseudocode_paths:
+            for address in decompile_targets:
+                record = functions.get(address)
+                if not record:
+                    continue
+                pseudocode_path = pseudocode_paths.get(address)
+                if pseudocode_path:
+                    record["decompilation_status"] = "success"
+                    record["pseudocode_path"] = pseudocode_path
+                    record["disassembly_status"] = "skipped"
+        if decompile_failures:
+            report_status(args, f"writing fallback disassembly for {len(decompile_failures)} decompile failures")
+            for address, reason in decompile_failures.items():
+                record = functions.get(address)
+                if not record:
+                    continue
+                record["decompilation_status"] = "failed"
+                record["decompilation_error"] = reason
+                failures.append(
+                    {
+                        "extractor": "pseudocode",
+                        "address": int(address),
+                        "name": record["name"],
+                        "reason": reason,
+                        "fatal": False,
+                    }
+                )
+                write_disassembly_artifact(record, disassembly_dir, max_disassembly_lines)
+
+    disassembly_targets = sorted(
+        address
+        for address in analysis_target_set
+        if functions.get(address, {}).get("decompilation_status") != "success"
+        and functions.get(address, {}).get("disassembly_status") != "success"
+    )
+    if disassembly_targets:
+        report_status(args, f"writing disassembly for {len(disassembly_targets)} target functions")
+        for address in disassembly_targets:
+            record = functions.get(address)
+            if record:
+                write_disassembly_artifact(record, disassembly_dir, max_disassembly_lines)
+
+    for address, record in functions.items():
+        if address in decompile_target_set or record["disassembly_status"] == "success":
+            continue
+        record["disassembly_status"] = "skipped"
 
     callers = {address: set() for address in functions}
     for edge in edges:
@@ -395,30 +594,42 @@ def main():
     import ida_loader
     import ida_pro
 
+    report_status(args, "waiting for IDA auto-analysis")
     ida_auto.auto_wait()
 
     workspace_root = Path(args["workspace_root"])
+    report_status(args, "preparing extraction workspace")
     workspace_root.joinpath("Analysis Data").mkdir(parents=True, exist_ok=True)
     workspace_root.joinpath("Raw Data").mkdir(parents=True, exist_ok=True)
     workspace_root.joinpath("IDB Files").mkdir(parents=True, exist_ok=True)
 
+    report_status(args, "extracting imports")
     imports_by_address = collect_imports()
+    report_status(args, "extracting strings")
     strings_by_address = collect_strings()
+    report_status(args, "extracting functions and call graph")
     functions, edges, failures, function_xrefs = collect_functions(
         imports_by_address,
         strings_by_address,
         workspace_root,
+        args,
     )
+    report_status(args, "extracting exports")
     exports = collect_exports()
+    report_status(args, "extracting segments")
     segments = collect_segments()
+    report_status(args, "extracting globals")
     globals_ = collect_globals(
         [function["address"] for function in functions],
         strings_by_address.keys(),
     )
+    report_status(args, "extracting types")
     types = collect_types()
 
+    report_status(args, "saving original IDB")
     ida_loader.save_database(args["idb_path"], ida_loader.DBFL_COMP)
 
+    report_status(args, "writing extraction JSON")
     bundle = {
         "metadata": collect_metadata(args),
         "functions": functions,

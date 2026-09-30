@@ -32,6 +32,20 @@ if %errorlevel% neq 0 (
 )
 
 echo.
+if defined REAI_CONFIG (
+    if exist "%REAI_CONFIG%" (
+        echo [REAI Setup] Existing config detected via REAI_CONFIG: %REAI_CONFIG%
+        echo [REAI Setup] Skipping interactive configuration.
+        goto config_done
+    )
+)
+
+if exist reai.toml (
+    echo [REAI Setup] Existing reai.toml detected.
+    echo [REAI Setup] Skipping interactive configuration.
+    goto config_done
+)
+
 echo [REAI Setup] Launching interactive configuration...
 python scripts\setup_config.py
 if %errorlevel% neq 0 (
@@ -42,6 +56,7 @@ if %errorlevel% neq 0 (
     exit /b %errorlevel%
 )
 
+:config_done
 echo.
 echo ======================================================================
 echo Setup Complete!
