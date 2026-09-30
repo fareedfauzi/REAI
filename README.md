@@ -68,19 +68,32 @@ REAI has been developed and tested in this repository on Windows. Other platform
 
 ## Installation
 
-From a checkout:
+To completely automate environment setup, package installation, and API configuration, run the setup script for your platform from a fresh checkout:
 
-```bash
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -U pip
-python -m pip install -e .
-python -m reai --help
+**Windows**:
+```bat
+.\setup.bat
 ```
 
-After editable installation, the package also exposes:
-
+**Linux / macOS**:
 ```bash
+bash setup.sh
+```
+
+The setup script will:
+1. Create and activate a Python virtual environment.
+2. Install REAI and its dependencies.
+3. Launch an interactive configuration tool to set your IDA path, AI provider, and API key (`reai.toml`).
+4. Perform a live connection test to verify your API key works.
+
+After setup, simply activate your environment to use REAI:
+```bash
+# Windows
+.\.venv\Scripts\Activate.ps1
+
+# Linux / macOS
+source .venv/bin/activate
+
 reai --help
 ```
 
@@ -136,29 +149,31 @@ A sample workspace is named from the file stem and the first eight SHA-256 chara
 ```text
 reai-output/
 `-- malware_6e921af7/
-    |-- IDB Files/
-    |   |-- original.i64
-    |   |-- analyzed.i64
-    |   `-- analyzed.i64.reai.json
-    |-- REPORT/
-    |   |-- report.md
-    |   |-- report.html
-    |   `-- report.pdf
     |-- Analysis Data/
     |   |-- analysis.db
-    |   |-- sample.json
-    |   |-- functions.json
-    |   |-- callgraph.json
-    |   |-- function_analysis.json
-    |   |-- findings.json
-    |   |-- validated_analysis.json
-    |   |-- changes.json
-    |   `-- report_model.json
+    |   |-- ai_narrative.md
+    |   |-- ai_execution_flow.txt
+    |   `-- ...
+    |-- Analysis Findings/
+    |   |-- analyst-notebook.md
+    |   |-- phase-3-bottom-up-ai.md
+    |   `-- ...
     |-- Extracted Codes/
     |   |-- pseudocode/
     |   `-- disassembly/
+    |-- IDB Files/
+    |   |-- original.i64
+    |   `-- analyzed.i64
     |-- Raw Data/
-    `-- REAI Logs/
+    |   |-- imports.json
+    |   `-- strings.json
+    |-- REAI Logs/
+    |-- Readable Code/
+    |   `-- 0x401080.c
+    `-- REPORT/
+        |-- report.md
+        |-- report.html
+        `-- report.pdf
 ```
 
 The SQLite database in `Analysis Data/analysis.db` is the canonical analysis state. The IDB is an analyst output, not REAI's reasoning memory.
@@ -169,7 +184,8 @@ See [docs/output-structure.md](docs/output-structure.md).
 
 ```text
 Sample -> IDA extraction -> call graph -> bottom-up AI analysis
-       -> targeted MCP investigation -> validation -> IDB/report outputs
+       -> targeted MCP investigation -> validation -> IDB enrichment
+       -> AI narrative & readable code generation -> report generation
 ```
 
 REAI targets unnamed `sub_*` functions and avoids overwriting meaningful names unless validated policy marks a change as eligible. Calibrated confidence controls whether a finding becomes an IDB change. Low-confidence or contradictory findings are preserved for review rather than forced into the IDB.
@@ -179,8 +195,17 @@ REAI performs a bottom-up first-pass analysis of IDA functions and uses targeted
 Details:
 
 - [docs/analysis-pipeline.md](docs/analysis-pipeline.md)
-- [docs/confidence-and-evidence.md](docs/confidence-and-evidence.md)
-- [docs/state-machine.md](docs/state-machine.md)
+
+## Analyzing Raw Shellcode
+
+When you provide a standard executable (PE, ELF, etc.), REAI's automated IDA extraction perfectly detects the architecture. However, raw shellcode (`.bin`, `.raw`) lacks headers, and IDA's batch-mode usually defaults to 32-bit x86.
+
+**Workaround for 64-bit Shellcode:**
+If you want to analyze 64-bit raw shellcode using REAI, the best workflow is:
+1. Open the `.bin` shellcode manually in the IDA GUI.
+2. Select "64-bit" when prompted.
+3. Save the resulting database (`.i64`).
+4. Instead of pointing REAI at the `.bin` file, point REAI at the `.i64` file you just saved. REAI will happily extract from your pre-configured database!
 
 ## Resume & Recovery
 
@@ -211,7 +236,7 @@ Developer-only switches still exist for test and recovery workflows, but the int
 
 ## Reports
 
-REAI generates reports from validated structured state, not by asking the model to write a final narrative or by dumping every database row. The report engine synthesizes malware behavior from validated functions, artifacts, imports, execution flows, IDB-enrichment results, contradictions, and confidence labels. Outputs are:
+REAI generates reports from a blend of validated structured state and AI-synthesized narratives. The report engine synthesizes malware behavior from validated functions, artifacts, imports, and execution flows, and triggers an AI rewrite for readable code snippets, while using ReportLab to render a clean PDF. Outputs are:
 
 - `report/report.md`: portable source report.
 - `report/report.html`: standalone readable HTML.
@@ -261,8 +286,6 @@ pytest -q
 ```
 
 IDA-dependent tests are skipped unless `REAI_IDA_PATH` or `IDA_PATH` is set.
-
-Contributor notes are in [docs/development.md](docs/development.md). The implementation plan remains in [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
 
 ## Release Status
 

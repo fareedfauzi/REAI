@@ -81,9 +81,9 @@ The original IDB is preserved as `ida/original.i64`. REAI copies it to a tempora
 
 ## Phase 7: Report Generation
 
-Reports are rendered from validated structured facts. The report generator builds an evidence-backed `ReportModelV2`, creates deterministic narrative sections, validates references, and writes Markdown, HTML, and PDF outputs.
+Reports are rendered from a mix of validated structured facts and AI-generated narratives. The generator builds an evidence-backed `ReportModelV2`, writes a curated `analyst-notebook.md`, triggers LLM tasks to write a behavior-driven Technical Analysis narrative (`ai_narrative.md`), rewrites critical functions into `Readable Code/*.c`, and finally synthesizes Markdown, HTML, and PDF outputs.
 
-The report engine separates the semantic execution flow from the raw call graph. It derives execution stages from validated functions, artifacts, imports, and execution-flow rows, and suppresses compiler/runtime helpers from the primary narrative. Function importance is scored separately from confidence so a high-confidence trivial helper does not outrank malware orchestration logic.
+The report engine explicitly requests the AI to generate a threat-intelligence-grade technical narrative backed by Phase 3 behaviors, Phase 4 MCP evidence, and Phase 5 validations. AI rewrite transforms raw pseudocode into clean C snippets, which are subsequently integrated into the report HTML and PDF using ReportLab.
 
 IOC presentation is typed: network IOC, host IOC, build artifact, command-line artifact, and contextual artifact are distinct categories. PDB paths and similar build strings are treated as development context unless stronger evidence exists. ATT&CK mappings are emitted only when specific behavior has supporting functions, APIs, or artifacts.
 

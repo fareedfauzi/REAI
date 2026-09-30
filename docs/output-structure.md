@@ -29,6 +29,8 @@ Each sample gets a workspace:
 | --- | --- |
 | `Analysis Data/sample.json` | Sample identity and current state. |
 | `Analysis Data/binary_metadata.json` | IDA/binary metadata. |
+| `Analysis Data/ai_narrative.md` | AI-generated technical narrative synthesizing all phases. |
+| `Analysis Data/ai_execution_flow.txt` | AI-generated high-level behavioral execution tree. |
 | `Analysis Data/functions.json` | Extracted function records and stats. |
 | `Analysis Data/callgraph.json` | Call graph and SCC structure. |
 | `Analysis Data/extraction_stats.json` | Bulk extraction counters. |
@@ -52,6 +54,16 @@ Each sample gets a workspace:
 | `Analysis Data/changes.json` | Enrichment run and application results. |
 | `Analysis Data/report_model.json` | Structured source model for reports. |
 
+## Analysis Findings
+
+| Path | Purpose |
+| --- | --- |
+| `Analysis Findings/analyst-notebook.md` | Curated analyst bridge linking phase findings to the final report. |
+| `Analysis Findings/phase-3-bottom-up-ai.md` | Human-readable summary of Phase 3 findings. |
+| `Analysis Findings/phase-4-mcp-investigation.md` | Human-readable summary of Phase 4 findings. |
+| `Analysis Findings/phase-5-semantic-validation.md` | Human-readable summary of Phase 5 findings. |
+| `Analysis Findings/phase-6-idb-enrichment.md` | Human-readable summary of applied IDB changes. |
+
 ## Raw Context & Extracted Code
 
 | Directory | Purpose |
@@ -59,6 +71,7 @@ Each sample gets a workspace:
 | `Raw Data/` | Strings, imports, exports, globals, segments, types, xrefs, and decompile failures. |
 | `Extracted Codes/pseudocode/` | Extracted pseudocode files. |
 | `Extracted Codes/disassembly/` | Extracted disassembly files. |
+| `Readable Code/` | AI-rewritten, clean C code snippets for critical functions. |
 | `REAI Logs/` | Runtime log files, especially `reai.log`. |
 
 ## Batch Outputs

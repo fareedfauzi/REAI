@@ -227,6 +227,7 @@ class AnalysisOrchestrator:
         item.status = ResultStatus.FAILED
         item.error_type = exc.__class__.__name__
         item.error = redact_secrets(exc)
+        self._progress(f"{item.sample.filename}: analysis failed - {item.error_type}")
         try:
             repository = AnalysisRepository(item.workspace.database)
             stored = repository.get_sample(item.sample.sample_id)
@@ -357,7 +358,7 @@ class AnalysisOrchestrator:
         workspace = find_workspace_by_sha256(self.output_root, hashes.sha256)
         existing = workspace is not None
         if workspace is None:
-            workspace = WorkspacePaths.for_sample(self.output_root, source_path.name, hashes.sha256)
+            workspace = WorkspacePaths.for_sample(self.output_root, source_path.name, hashes.md5)
 
         sample = Sample.from_file_hashes(
             source_path=source_path,
@@ -533,6 +534,9 @@ class AnalysisOrchestrator:
             stats = export_bundle(item.workspace, ida_result.bundle)
             repository.persist_extraction(item.sample.sample_id, ida_result.bundle)
             LOGGER.info("extraction persisted")
+            
+            if stats.total_functions == 0:
+                raise ValueError("File contains no executable code or functions. Is this a supported binary?")
 
             LOGGER.info("state transition %s", SampleState.GRAPH_BUILDING)
             self._progress_state(item, SampleState.GRAPH_BUILDING)
@@ -566,11 +570,12 @@ class AnalysisOrchestrator:
             if failed_sample is not None:
                 self._write_sample_metadata(item.workspace, failed_sample)
             raise
-        except Exception:
+        except Exception as exc:
+            msg = str(exc) if isinstance(exc, ValueError) else "Bulk extraction failed."
             repository.update_sample_state(
                 item.sample.sample_id,
                 SampleState.FAILED_EXTRACTION,
-                message="Bulk extraction failed.",
+                message=msg,
             )
             failed_sample = repository.get_sample(item.sample.sample_id)
             if failed_sample is not None:

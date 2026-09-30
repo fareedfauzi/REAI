@@ -152,6 +152,7 @@ def synthesize_report_model(
         analytical_gaps=analytical_gaps,
         appendix=appendix,
         stats=stats,
+        ai_narrative=workspace.analysis.joinpath("ai_narrative.md").read_text(encoding="utf-8") if workspace.analysis.joinpath("ai_narrative.md").exists() else None,
     )
 
 
@@ -259,18 +260,34 @@ def _normalize_function_row(row: dict[str, Any]) -> dict[str, Any]:
 
 def _load_function_pseudocode(workspace: WorkspacePaths, address: str) -> str:
     normalized = _address_token(address)
-    if not workspace.pseudocode.exists():
-        return ""
-    matches = sorted(workspace.pseudocode.glob(f"{normalized}_*.c"))
-    if not matches:
-        short = normalized.lstrip("0") or "0"
-        matches = sorted(workspace.pseudocode.glob(f"*{short}_*.c"))
-    if not matches:
-        return ""
-    try:
-        return matches[0].read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return ""
+    
+    # Try pseudocode (.c) first
+    if workspace.pseudocode.exists():
+        matches = sorted(workspace.pseudocode.glob(f"{normalized}_*.c"))
+        if not matches:
+            short = normalized.lstrip("0") or "0"
+            matches = sorted(workspace.pseudocode.glob(f"*{short}_*.c"))
+            
+        if matches:
+            try:
+                return matches[0].read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                pass
+                
+    # Fallback to disassembly (.asm)
+    if workspace.disassembly.exists():
+        matches = sorted(workspace.disassembly.glob(f"{normalized}_*.asm"))
+        if not matches:
+            short = normalized.lstrip("0") or "0"
+            matches = sorted(workspace.disassembly.glob(f"*{short}_*.asm"))
+            
+        if matches:
+            try:
+                return matches[0].read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                pass
+                
+    return ""
 
 
 def _address_token(address: str) -> str:
@@ -356,21 +373,13 @@ def _build_function_execution_flow(
         summary = str(row.get("summary") or "").rstrip(".")
         if summary:
             steps.append(summary)
-    lower_code = original_code.lower()
-    if "if (" in lower_code or "\n  if" in lower_code:
-        steps.append("Evaluate branch conditions visible in the decompiled code")
-    for artifact in artifacts[:4]:
-        steps.append(f"Reference artifact: {artifact}")
-    if "return 1" in lower_code:
-        steps.append("Return success status")
-    elif "return 0" in lower_code:
-        steps.append("Return failure or no-op status")
-    else:
-        steps.append("End function")
+
+    steps.append("End function")
 
     lines: list[str] = []
-    for index, step in enumerate(dict.fromkeys(steps)):
-        prefix = "|-- " if index < len(steps) - 1 else "`-- "
+    unique_steps = list(dict.fromkeys(steps))
+    for index, step in enumerate(unique_steps):
+        prefix = "|-- " if index < len(unique_steps) - 1 else "`-- "
         lines.append(prefix + step)
     return "\n".join(lines)
 
@@ -455,8 +464,19 @@ def _score_and_categorize_functions(
         function_artifacts = artifacts_by_function.get(address, [])
         original_code = _load_function_pseudocode(workspace, address)
         original_code = _normalize_code_for_report(original_code)
-        readable_code = _build_readable_code(original_code, original, display_name, row.get("variables") or [], applied_names)
-        execution_flow = _build_function_execution_flow(row, display_name, apis, function_artifacts, original_code)
+        
+        ai_readable_path = workspace.readable_code / f"{address}.c"
+        if ai_readable_path.exists():
+            readable_code = ai_readable_path.read_text(encoding="utf-8")
+        else:
+            readable_code = _build_readable_code(original_code, original, display_name, row.get("variables") or [], applied_names)
+            
+        # Prefer AI-generated execution flow if available
+        ai_flow_path = workspace.analysis / "ai_execution_flow.txt"
+        if ai_flow_path.exists():
+            execution_flow = ai_flow_path.read_text(encoding="utf-8").strip()
+        else:
+            execution_flow = _build_function_execution_flow(row, display_name, apis, function_artifacts, original_code)
         text = _function_text(row, display_name, apis, function_artifacts)
         confidence = float(row.get("confidence") or 0.0)
         is_runtime = _is_runtime_helper(original, display_name, text)

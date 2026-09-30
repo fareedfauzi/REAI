@@ -108,7 +108,7 @@ def build_command_handlers(
 
 
 def build_configuration_items(artifacts: list[ValidatedArtifact]) -> list[ConfigurationItem]:
-    items: list[ConfigurationItem] = []
+    items_by_id: dict[str, ConfigurationItem] = {}
     for artifact in artifacts:
         if artifact.role == "c2":
             key = "c2_domain" if artifact.artifact_type == "domain" else f"c2_{artifact.artifact_type}"
@@ -122,9 +122,11 @@ def build_configuration_items(artifacts: list[ValidatedArtifact]) -> list[Config
             key = "self_deletion_command"
         else:
             continue
-        items.append(
-            ConfigurationItem(
-                item_id=_id("config", key, artifact.normalized_value),
+            
+        item_id = _id("config", key, artifact.normalized_value)
+        if item_id not in items_by_id:
+            items_by_id[item_id] = ConfigurationItem(
+                item_id=item_id,
                 key=key,
                 value=artifact.original_value,
                 value_type=artifact.artifact_type,
@@ -132,8 +134,7 @@ def build_configuration_items(artifacts: list[ValidatedArtifact]) -> list[Config
                 confidence=artifact.confidence,
                 evidence=artifact.evidence,
             )
-        )
-    return items
+    return list(items_by_id.values())
 
 
 def _id(*parts) -> str:

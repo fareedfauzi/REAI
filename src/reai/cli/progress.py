@@ -22,7 +22,7 @@ PHASE_TITLES: dict[int, str] = {
     4: "running REAI MCP investigation",
     5: "validating malware understanding",
     6: "renaming, commenting, and saving analyzed IDB",
-    7: "generating intelligence report",
+    7: "generating analysis report",
 }
 
 _PHASE_RE = re.compile(r"^(?:(?P<sample>.+?):\s*)?Phase\s+(?P<phase>[1-7]):\s*(?P<detail>.+)$")
@@ -103,7 +103,7 @@ class PhaseProgress:
 @contextmanager
 def phase_progress(initial_message: str = "Starting REAI analysis...") -> Iterator[PhaseProgress]:
     progress = PhaseProgress(initial_message)
-    with Live(progress.render(), console=console, refresh_per_second=10, transient=True) as live:
+    with Live(progress.render(), console=console, refresh_per_second=10, transient=False) as live:
         original_update = progress.update
 
         def update_and_refresh(message: str) -> None:
@@ -117,12 +117,12 @@ def phase_progress(initial_message: str = "Starting REAI analysis...") -> Iterat
 def _render_phase_line(phase: int, line: PhaseLine, *, running: bool) -> Text | Group:
     detail = escape(line.detail)
     if line.status == "done":
-        return Text.from_markup(f"[green]{CHECK_SYMBOL}[/green] Phase {phase}: {detail}")
+        return Text.from_markup(f"[green]{CHECK_SYMBOL}[/green]  Phase {phase}: {detail}")
     if line.status == "failed":
-        return Text.from_markup(f"[red]{FAIL_SYMBOL}[/red] Phase {phase}: {detail}")
+        return Text.from_markup(f"[red]{FAIL_SYMBOL}[/red]  Phase {phase}: {detail}")
     if running:
         return Group(Spinner(SPINNER_NAME, text=Text.from_markup(f" Phase {phase}: {detail}")))
-    return Text.from_markup(f"[dim]{PENDING_SYMBOL} Phase {phase}: {detail}[/dim]")
+    return Text.from_markup(f"[dim]{PENDING_SYMBOL}  Phase {phase}: {detail}[/dim]")
 
 
 def _is_completion(detail: str) -> bool:

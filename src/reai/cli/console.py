@@ -43,6 +43,8 @@ def _render_single(result: AnalysisRunResult) -> None:
         if item.status == ResultStatus.ENRICHED
         else "REAI - Analysis Complete"
         if item.status == ResultStatus.COMPLETE
+        else "REAI - Analysis Failed"
+        if item.status == ResultStatus.FAILED
         else "REAI - Autonomous Malware Reverse Engineering"
     )
     _render_header(title)
@@ -55,7 +57,14 @@ def _render_single(result: AnalysisRunResult) -> None:
     if item.ida_version:
         table.add_row("IDA", item.ida_version)
     table.add_row("Output", _display_path(item.workspace.root))
-    table.add_row("Status", item.status.value)
+    
+    if item.status == ResultStatus.FAILED:
+        table.add_row("Status", f"[red]{item.status.value}[/red]")
+        if getattr(item, "error", None):
+            table.add_row("Error", f"[red]{item.error}[/red]")
+    else:
+        table.add_row("Status", item.status.value)
+        
     console.print(table)
     console.print("-" * min(console.width, 80), style="cyan")
     steps = Table.grid(padding=(0, 2))
@@ -78,20 +87,41 @@ def _render_single(result: AnalysisRunResult) -> None:
                 _render_phase6_stats(item.enrichment_stats)
                 if item.report_stats is not None:
                     _render_phase7_stats(item.report_stats)
-                    console.print("\nAnalysis complete. Report and analyzed IDB are ready.")
+                    if item.status == ResultStatus.FAILED:
+                        console.print(f"\n[red]Analysis failed during reporting: {getattr(item, 'error', 'Unknown error')}[/red]")
+                    else:
+                        console.print("\nAnalysis complete. Report and analyzed IDB are ready.")
                 else:
-                    console.print("\nPhase 6 complete. Analyzed IDB is ready.")
+                    if item.status == ResultStatus.FAILED:
+                        console.print(f"\n[red]Analysis failed: {getattr(item, 'error', 'Unknown error')}[/red]")
+                    else:
+                        console.print("\nPhase 6 complete. Analyzed IDB is ready.")
             else:
-                console.print("\nPhase 5 complete. Ready for IDB enrichment.")
+                if item.status == ResultStatus.FAILED:
+                    console.print(f"\n[red]Analysis failed: {getattr(item, 'error', 'Unknown error')}[/red]")
+                else:
+                    console.print("\nPhase 5 complete. Ready for IDB enrichment.")
         elif item.mcp_stats is not None:
-            console.print("\nPhase 4 complete. Ready for multi-pass malware understanding.")
+            if item.status == ResultStatus.FAILED:
+                console.print(f"\n[red]Analysis failed: {getattr(item, 'error', 'Unknown error')}[/red]")
+            else:
+                console.print("\nPhase 4 complete. Ready for multi-pass malware understanding.")
         else:
-            console.print("\nPhase 3 complete. Ready for autonomous MCP investigation.")
+            if item.status == ResultStatus.FAILED:
+                console.print(f"\n[red]Analysis failed: {getattr(item, 'error', 'Unknown error')}[/red]")
+            else:
+                console.print("\nPhase 3 complete. Ready for autonomous MCP investigation.")
     elif item.extraction_stats is not None:
         _render_phase2_stats(item.extraction_stats)
-        console.print("\nPhase 2 complete. Ready for bottom-up AI analysis.")
+        if item.status == ResultStatus.FAILED:
+            console.print(f"\n[red]Analysis failed: {getattr(item, 'error', 'Unknown error')}[/red]")
+        else:
+            console.print("\nPhase 2 complete. Ready for bottom-up AI analysis.")
     else:
-        console.print("\nPhase 1 initialization complete.")
+        if item.status == ResultStatus.FAILED:
+            console.print(f"\n[red]Analysis failed: {getattr(item, 'error', 'Unknown error')}[/red]")
+        else:
+            console.print("\nPhase 1 initialization complete.")
 
 
 def _render_batch(result: AnalysisRunResult) -> None:

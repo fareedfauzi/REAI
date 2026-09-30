@@ -315,7 +315,7 @@ def _yara_rule_block(model: ReportModel) -> str:
         "{",
         "    meta:",
         f'        description = "Detects {model.sample.filename} malware artifacts and stager logic"',
-        '        author = "REAI Automated Threat Intelligence"',
+        '        author = "REAI Automated Threat Analysis"',
         f'        date = "{date_str}"',
         f'        sample_sha256 = "{sha256}"',
         f'        sample_md5 = "{md5}"',

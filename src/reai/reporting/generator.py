@@ -32,6 +32,16 @@ class ReportGenerator:
         if not self.config.enabled:
             return None
         self.workspace.report.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            from reai.analysis.ai_narrative import generate_ai_narrative
+            from reai.analysis.ai_rewrite import generate_ai_readable_code
+            
+            generate_ai_narrative(sample.sample_id, self.workspace.root)
+            generate_ai_readable_code(sample.sample_id, self.workspace.root)
+        except Exception as e:
+            LOGGER.error(f"Failed to generate AI content: {e}")
+            raise
         model = synthesize_report_model(self.config, self.repository, self.workspace, sample.sample_id)
         write_report_findings(self.workspace, model)
         sections = _build_legacy_sections(model)
@@ -112,7 +122,7 @@ def _build_legacy_sections(model: ReportModelV2) -> list[ReportSection]:
         ("execution_chain", "Malware Execution Chain", "\n".join(s.description for s in model.execution_chain)),
         ("technical_analysis", "Technical Analysis", "\n\n".join(f"{s.title}: {s.narrative}" for s in model.technical_analysis)),
         ("reverse_engineering", "Reverse Engineering Findings", "\n".join(f"{f.display_name}: {f.role}" for f in model.key_functions)),
-        ("threat_intelligence", "Threat Intelligence & Attribution", model.threat_intelligence.development_context),
+        ("threat_intelligence", "Threat Analysis & Attribution", model.threat_intelligence.development_context),
         ("iocs", "Indicators of Compromise & Artifacts", "\n".join(f"{i.ioc_type}: {i.value}" for i in model.indicators)),
         ("mitre_attack", "MITRE ATT&CK Mappings", "\n".join(f"{a.technique_id}: {a.technique}" for a in model.attack_mappings)),
         ("detection_hunting", "Detection & Threat Hunting", "\n".join(h.lead_title for h in model.hunting_leads)),

@@ -2,19 +2,31 @@
 
 REAI is packaged as a Python project and currently targets Python 3.11 or newer.
 
-## Windows From Source
+## Automated Setup (Recommended)
 
-```bash
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -U pip
-python -m pip install -e .
-python -m reai --help
+From a fresh checkout, run the setup script for your platform:
+
+**Windows**:
+```bat
+.\setup.bat
 ```
 
-The editable install exposes the `reai` console script:
+**Linux / macOS**:
+```bash
+bash setup.sh
+```
+
+The script will automatically create a virtual environment, install REAI, launch an interactive configuration tool to write `reai.toml`, and test your AI API key.
+
+Once complete, activate your environment to use the `reai` CLI:
 
 ```bash
+# Windows
+.\.venv\Scripts\Activate.ps1
+
+# Linux / macOS
+source .venv/bin/activate
+
 reai --version
 reai --help
 ```

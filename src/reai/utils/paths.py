@@ -23,6 +23,7 @@ WORKSPACE_SUBDIRS = (
     "Raw Data",
     "Extracted Codes",
     "REAI Logs",
+    "Readable Code",
 )
 
 LEGACY_EMPTY_WORKSPACE_SUBDIRS = ("analysis", "raw", "ida")
@@ -40,14 +41,17 @@ class WorkspacePaths(BaseModel):
     extracted_codes: Path
     pseudocode: Path
     disassembly: Path
+    readable_code: Path
     logs: Path
     database: Path
     sample_metadata: Path
 
     @classmethod
-    def for_sample(cls, output_root: Path, filename: str, sha256: str) -> "WorkspacePaths":
+    def for_sample(cls, output_root: Path, filename: str, md5_hash: str) -> "WorkspacePaths":
+        from datetime import datetime
         stem = sanitize_filename_stem(Path(filename).stem)
-        root = output_root / f"{stem}_{sha256[:8]}"
+        dt_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        root = output_root / f"{stem}_{md5_hash}_{dt_str}"
         return cls.from_root(root)
 
     @classmethod
@@ -64,6 +68,7 @@ class WorkspacePaths(BaseModel):
             extracted_codes=extracted_codes,
             pseudocode=extracted_codes / "pseudocode",
             disassembly=extracted_codes / "disassembly",
+            readable_code=root / "Readable Code",
             logs=root / "REAI Logs",
             database=analysis / "analysis.db",
             sample_metadata=analysis / "sample.json",

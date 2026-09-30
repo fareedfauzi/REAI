@@ -114,7 +114,7 @@ def _executive_summary(model: ReportModel) -> str:
         attribution.append(f"- **Staged File Indicators**: {len(drop_iocs)} host-level dropped file path(s) identified for endpoint threat detection.")
 
     if attribution:
-        paragraphs.append("### Threat Intelligence & Attribution\n\n" + "\n".join(attribution))
+        paragraphs.append("### Threat Analysis & Attribution\n\n" + "\n".join(attribution))
 
     if persistence:
         paragraphs.append(f"Persistence behavior is supported by the {persistence.name} subsystem, with evidence from {len(persistence.functions)} function(s).")

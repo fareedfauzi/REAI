@@ -214,6 +214,7 @@ class ReportModelV2(BaseModel):
     analytical_gaps: list[AnalyticalGap] = Field(default_factory=list)
     appendix: AppendixModel = Field(default_factory=AppendixModel)
     stats: ReportStatsV2 = Field(default_factory=ReportStatsV2)
+    ai_narrative: str | None = None
 
     # Legacy/compatibility bridges for older tests/callers:
     @property

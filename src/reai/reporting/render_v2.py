@@ -121,6 +121,14 @@ def _sample_profile_items(model: ReportModelV2) -> list[tuple[str, str]]:
 
 def _technical_analysis_lines(model: ReportModelV2) -> list[str]:
     lines: list[str] = []
+    
+    if getattr(model, "ai_narrative", None):
+        lines.append(model.ai_narrative.strip())
+        lines.append("")
+        if model.threat_intelligence.development_context:
+            lines.extend(["### Build and Development Context", "", model.threat_intelligence.development_context, ""])
+        return lines
+
     main = _primary_function(model)
     if main:
         lines.extend(
@@ -332,7 +340,8 @@ def _capability_feature_lines(model: ReportModelV2) -> list[str]:
         return lines
     lines.extend(["| Capability | What the evidence supports | Function / Artifact Evidence |", "| --- | --- | --- |"])
     for stage in model.execution_chain:
-        evidence = ", ".join(stage.functions[:2] + stage.artifacts[:3]) or "Function-level evidence only"
+        formatted_evidence = [f"`{f}`" for f in stage.functions[:2]] + [f"`{a}`" for a in stage.artifacts[:3]]
+        evidence = ", ".join(formatted_evidence) or "Function-level evidence only"
         lines.append(f"| {stage.stage_name} | {_md_cell(stage.description)} | {_md_cell(evidence)} |")
     lines.append("")
     return lines
@@ -795,7 +804,7 @@ def render_html_v2(model: ReportModelV2) -> str:
             close_list()
             close_code_detail()
             detail_title = line[6:].strip()
-            body_lines.append('<details class="code-section" open>')
+            body_lines.append('<details class="code-section">')
             body_lines.append(
                 '<summary class="code-section-header">'
                 '<span class="toggle-icon">&#9662;</span>'
@@ -832,7 +841,7 @@ def render_html_v2(model: ReportModelV2) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>REAI Intelligence: {html.escape(model.sample.filename)}</title>
+<title>REAI Analysis: {html.escape(model.sample.filename)}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -1201,6 +1210,103 @@ mermaid.initialize({{
     flowchart: {{ useMaxWidth: true, htmlLabels: true }}
 }});
 </script>
+<script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+<link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
+<script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+<style>
+/* Modern DataTables Styling */
+.dataTables_wrapper {{
+    padding: 16px 0;
+    font-family: inherit;
+    font-size: 13.5px;
+    color: var(--text);
+}}
+.dataTables_wrapper .dataTables_filter input {{
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 12px;
+    margin-left: 8px;
+    font-size: 13px;
+    outline: none;
+    box-shadow: inset 0 1px 2px rgba(15,23,42,0.02);
+    transition: all 0.2s;
+    background: #fff;
+}}
+.dataTables_wrapper .dataTables_filter input:focus {{
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
+}}
+.dataTables_wrapper .dataTables_length select {{
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 13px;
+    outline: none;
+    background: #fff;
+}}
+.dataTables_wrapper .dataTables_paginate .paginate_button {{
+    padding: 0.4em 0.8em !important;
+    margin-left: 4px;
+    border-radius: 6px !important;
+    border: 1px solid transparent !important;
+    color: var(--muted) !important;
+    font-weight: 500;
+    transition: all 0.15s;
+}}
+.dataTables_wrapper .dataTables_paginate .paginate_button:hover {{
+    background: var(--soft) !important;
+    border-color: var(--border) !important;
+    color: var(--text) !important;
+}}
+.dataTables_wrapper .dataTables_paginate .paginate_button.current, 
+.dataTables_wrapper .dataTables_paginate .paginate_button.current:hover {{
+    background: var(--accent) !important;
+    color: white !important;
+    border-color: var(--accent) !important;
+    box-shadow: 0 2px 4px rgba(79, 70, 229, 0.2);
+}}
+.dataTables_wrapper .dataTables_info {{
+    color: var(--muted) !important;
+    padding-top: 1.2em !important;
+}}
+table.dataTable.no-footer {{
+    border-bottom: 1px solid var(--border) !important;
+}}
+table.dataTable thead th {{
+    background: var(--soft) !important;
+    color: #475569 !important;
+    border-bottom: 2px solid var(--border) !important;
+    font-weight: 600 !important;
+    padding: 12px 15px !important;
+}}
+table.dataTable tbody td {{
+    padding: 12px 15px !important;
+    border-bottom: 1px solid var(--border) !important;
+}}
+table.dataTable tbody tr:hover {{
+    background: #f8fafc !important;
+}}
+
+/* Improve code block string readability inside the table */
+table.dataTable tbody td code {{
+    background: transparent;
+    border: none;
+    padding: 0;
+    color: #0f172a;
+    font-weight: 500;
+    font-size: 13px;
+    word-break: break-all;
+}}
+</style>
+<script>
+$(document).ready(function() {{
+    $('#strings-analysis').nextUntil('h2, h3', '.table-container').find('table').DataTable({{
+        pageLength: 20,
+        lengthMenu: [10, 20, 50, 100],
+        language: {{ search: "Filter strings:" }}
+    }});
+}});
+</script>
 </body>
 </html>
 """
@@ -1257,6 +1363,14 @@ def _format_inline(text: str) -> str:
     escaped = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", escaped)
     # Format italic *foo*
     escaped = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", escaped)
+    return escaped
+
+
+def _format_inline_pdf(text: str) -> str:
+    escaped = html.escape(text)
+    escaped = re.sub(r"`([^`]+)`", r"<font name='Courier'>\1</font>", escaped)
+    escaped = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", escaped)
+    escaped = re.sub(r"\*([^*]+)\*", r"<i>\1</i>", escaped)
     return escaped
 
 
@@ -1328,6 +1442,36 @@ def render_pdf_v2(markdown: str, model: ReportModelV2, pdf_path: Path) -> None:
             spaceAfter=8,
             keepWithNext=True,
         )
+        h3_style = ParagraphStyle(
+            "Heading3",
+            parent=styles["Heading3"],
+            fontSize=12,
+            leading=16,
+            textColor=colors.HexColor("#2D3748"),
+            spaceBefore=10,
+            spaceAfter=6,
+            keepWithNext=True,
+        )
+        h4_style = ParagraphStyle(
+            "Heading4",
+            parent=styles["Heading4"],
+            fontSize=10.5,
+            leading=14,
+            textColor=colors.HexColor("#4A5568"),
+            spaceBefore=8,
+            spaceAfter=4,
+            keepWithNext=True,
+        )
+        h5_style = ParagraphStyle(
+            "Heading5",
+            parent=styles.get("Heading5", styles["Normal"]),
+            fontSize=9.5,
+            leading=12,
+            textColor=colors.HexColor("#4A5568"),
+            spaceBefore=6,
+            spaceAfter=4,
+            keepWithNext=True,
+        )
         body_style = ParagraphStyle(
             "Body",
             parent=styles["Normal"],
@@ -1343,9 +1487,15 @@ def render_pdf_v2(markdown: str, model: ReportModelV2, pdf_path: Path) -> None:
             leading=10,
             textColor=colors.HexColor("#2B6CB0"),
         )
+        table_cell_style = ParagraphStyle(
+            "TableCell",
+            parent=body_style,
+            fontSize=8.5,
+            leading=11,
+        )
 
         story = []
-        story.append(Paragraph(f"<b>REAI MALWARE INTELLIGENCE REPORT</b>", body_style))
+        story.append(Paragraph(f"<b>REAI MALWARE ANALYSIS REPORT</b>", body_style))
         story.append(Spacer(1, 10))
         story.append(Paragraph(f"{model.sample.filename}", title_style))
         story.append(Paragraph(f"<b>Classification:</b> {model.sample.observed_role} | <b>Platform:</b> Windows {model.sample.architecture}", body_style))
@@ -1357,9 +1507,31 @@ def render_pdf_v2(markdown: str, model: ReportModelV2, pdf_path: Path) -> None:
         in_code_block = False
         code_lang = ""
         code_lines: list[str] = []
+        
+        table_data = []
+
+        def flush_table():
+            if table_data:
+                t = Table(table_data, colWidths=[None]*len(table_data[0]))
+                t.setStyle(TableStyle([
+                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#f1f5f9")),
+                    ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor("#1A365D")),
+                    ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+                    ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                    ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                    ('BOTTOMPADDING', (0,0), (-1,0), 6),
+                    ('BACKGROUND', (0,1), (-1,-1), colors.white),
+                    ('GRID', (0,0), (-1,-1), 1, colors.HexColor("#e2e8f0"))
+                ]))
+                story.append(t)
+                story.append(Spacer(1, 6))
+                table_data.clear()
 
         for line in markdown.splitlines():
-            if line.startswith("# Malware Intelligence Report"):
+            if not line.startswith("|"):
+                flush_table()
+
+            if line.startswith("# Malware Analysis Report"):
                 continue
             if line.startswith("```"):
                 if in_code_block:
@@ -1385,19 +1557,26 @@ def render_pdf_v2(markdown: str, model: ReportModelV2, pdf_path: Path) -> None:
                 code_lines.append(line)
                 continue
 
-            if line.startswith("## "):
-                story.append(Paragraph(f"<b>{html.escape(line[3:])}</b>", h2_style))
-            elif line.startswith("# "):
-                story.append(Paragraph(f"<b>{html.escape(line[2:])}</b>", h2_style))
+            if line.startswith("##### "):
+                story.append(Paragraph(f"<b>{_format_inline_pdf(line[6:])}</b>", h5_style))
+            elif line.startswith("#### "):
+                story.append(Paragraph(f"<b>{_format_inline_pdf(line[5:])}</b>", h4_style))
             elif line.startswith("### "):
-                story.append(Paragraph(f"<b>{html.escape(line[4:])}</b>", body_style))
-            elif line.startswith("|") and not re.match(r"^\|(?:\s*:?-+:?\s*\|)+$", line.strip()):
-                # table row simplified representation
+                story.append(Paragraph(f"<b>{_format_inline_pdf(line[4:])}</b>", h3_style))
+            elif line.startswith("## "):
+                story.append(Paragraph(f"<b>{_format_inline_pdf(line[3:])}</b>", h2_style))
+            elif line.startswith("# "):
+                story.append(Paragraph(f"<b>{_format_inline_pdf(line[2:])}</b>", h2_style))
+            elif line.startswith("|"):
+                if re.match(r"^\|(?:\s*:?-+:?\s*\|)+$", line.strip()):
+                    continue
                 cells = [c.strip() for c in line.strip("|").split("|")]
-                story.append(Paragraph(" | ".join(html.escape(c) for c in cells[:4]), code_style))
+                row = [Paragraph(_format_inline_pdf(c), table_cell_style) for c in cells]
+                table_data.append(row)
             elif line.strip():
-                story.append(Paragraph(html.escape(line), body_style))
-
+                story.append(Paragraph(_format_inline_pdf(line), body_style))
+                
+        flush_table()
         doc.build(story)
     except Exception:
         # Fallback to deterministic PDF generation
@@ -1419,7 +1598,7 @@ def _render_plain_pdf_v2(markdown: str, model: ReportModelV2, pdf_path: Path) ->
                 current = []
     if current:
         pages.append(current)
-    _write_simple_pdf(pdf_path, pages or [[f"REAI Malware Intelligence Report: {model.sample.filename}"]])
+    _write_simple_pdf(pdf_path, pages or [[f"REAI Malware Analysis Report: {model.sample.filename}"]])
 
 
 def _markdown_to_pdf_lines_v2(markdown: str) -> list[str]:
@@ -1447,6 +1626,7 @@ def _markdown_to_pdf_lines_v2(markdown: str) -> list[str]:
         if re.match(r"^\|(?:\s*:?-+:?\s*\|)+$", line.strip()):
             continue
         clean = re.sub(r"^#{1,6}\s*", "", line)
+        clean = re.sub(r"</?(details|summary|strong)>", "", clean)
         clean = clean.replace("|", "  ")
         clean = re.sub(r"`([^`]+)`", r"\1", clean)
         clean = clean.replace("**", "").replace("*", "")
