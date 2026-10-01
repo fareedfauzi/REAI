@@ -79,6 +79,12 @@ class FunctionAnalysisResult(BaseModel):
         return stripped or None
 
 
+class FunctionAnalysisBatchResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    results: list[FunctionAnalysisResult]
+
+
 class FunctionContext(BaseModel):
     function: dict
     pseudocode: str | None = None
@@ -112,6 +118,11 @@ class AIRequestMetadata(BaseModel):
 
 class AIProviderResponse(BaseModel):
     result: FunctionAnalysisResult
+    request: AIRequestMetadata
+
+
+class AIProviderBatchResponse(BaseModel):
+    results: list[FunctionAnalysisResult]
     request: AIRequestMetadata
 
 

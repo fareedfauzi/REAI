@@ -140,6 +140,24 @@ Custom output directory:
 python -m reai malware.exe -o ./cases/ghosthopper
 ```
 
+Only enrich an IDB with function names, variable names, and comments:
+
+```bash
+python -m reai malware.exe --enrichidb
+```
+
+This mode skips MCP investigation, malware-understanding reports, and report generation. It runs inside one headless IDA session, analyzes unnamed functions in AI batches of 5 functions with 2 concurrent batch workers, applies function renames, variable renames, and comments directly to the live database, then saves the final 64-bit database beside the input sample as `malware.exe.i64`.
+
+Function names only:
+
+```bash
+python -m reai malware.exe --enrichidb-rename-only
+```
+
+This implies `--enrichidb`, but skips variable renames and function comments/explanations.
+
+Enrich-only output is intentionally just the sibling `.i64`; no REAI workspace, report folder, SQLite database, or extracted-code folder is created.
+
 Directory batch:
 
 ```bash
@@ -201,6 +219,7 @@ REAI performs a bottom-up first-pass analysis of IDA functions and uses targeted
 Detailed phase reference:
 
 - [docs/analysis-pipeline.md](docs/analysis-pipeline.md)
+- [docs/examples/enrich-idb.md](docs/examples/enrich-idb.md)
 
 ## Analyzing Raw Shellcode
 
@@ -232,6 +251,8 @@ Common options:
 - `-o, --output PATH`: output root directory.
 - `--recursive`: recursively discover files for directory input.
 - `--config PATH`: TOML configuration file.
+- `--enrichidb`: only rename `sub_*` functions, rename variables, add function comments, and save `<input-folder>/<filename>.i64`.
+- `--enrichidb-rename-only`: run enrich-IDB mode with function renames only; skip variable renames and comments.
 - `--verbose`: show detailed tracebacks on terminal errors and enable debug logging.
 - `--version`: print version.
 - `-h, --help`: print help.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import tempfile
 from enum import StrEnum
 from pathlib import Path
 from typing import Callable
@@ -9,7 +10,6 @@ from typing import Callable
 from pydantic import BaseModel, ConfigDict
 
 from reai.batch.summary import new_batch_id, write_batch_outputs
-from reai.analysis.enrich_only import build_enrich_only_candidates
 from reai.analysis.engine import MalwareUnderstandingEngine
 from reai.analysis.schemas import SemanticAnalysisStats
 from reai.core.config import ApplicationConfig
@@ -24,6 +24,7 @@ from reai.enrichment.schemas import EnrichmentStats
 from reai.extraction.models import ExtractionStats
 from reai.extraction.pipeline import export_bundle, load_exported_stats
 from reai.extraction.serialization import atomic_write_text
+from reai.ida.native_enricher import IDANativeEnricher
 from reai.ida.manager import IDAManager
 from reai.mcp.client import MCPError
 from reai.mcp.investigator import MCPInvestigator
@@ -109,6 +110,7 @@ class SampleResult(BaseModel):
     semantic_stats: SemanticAnalysisStats | None = None
     enrichment_stats: EnrichmentStats | None = None
     report_stats: ReportStats | None = None
+    enrich_idb_path: Path | None = None
     error: str | None = None
     error_type: str | None = None
 
@@ -124,6 +126,7 @@ class AnalysisRunResult(BaseModel):
     samples: list[SampleResult]
     skipped: list[str] = []
     batch_id: str | None = None
+    mode: str = "analysis"
     started_at: str | None = None
     completed_at: str | None = None
 
@@ -155,18 +158,26 @@ class AnalysisOrchestrator:
         *,
         progress_callback: ProgressCallback | None = None,
         enrich_idb_only: bool = False,
+        enrich_idb_rename_only: bool = False,
     ) -> None:
         self.config = config
+        self.final_output_root = config.output_dir
         self.output_root = config.output_dir
         self._progress_callback = progress_callback
         self.enrich_idb_only = enrich_idb_only
+        self.enrich_idb_rename_only = enrich_idb_rename_only
 
     def analyze(self, input_path: Path) -> AnalysisRunResult:
+        if self.enrich_idb_only:
+            return self._analyze_enrich_idb_native(input_path)
+
         action = "IDB enrichment" if self.enrich_idb_only else "analysis"
         self._progress(f"Starting REAI {action} for {input_path}")
         started_at = utc_now().isoformat()
         batch_id = new_batch_id()
         result = self.initialize(input_path)
+        result.output_root = self.final_output_root if self.enrich_idb_only else self.output_root
+        result.mode = "enrichidb" if self.enrich_idb_only else "analysis"
         result.batch_id = batch_id
         result.started_at = started_at
         try:
@@ -196,10 +207,114 @@ class AnalysisOrchestrator:
                     )
         finally:
             result.completed_at = utc_now().isoformat()
-            if result.input_kind == InputKind.DIRECTORY:
+            if result.input_kind == InputKind.DIRECTORY and not self.enrich_idb_only:
                 write_batch_outputs(result, batch_id=batch_id, started_at=started_at, completed_at=result.completed_at)
             self._progress("REAI analysis finished")
         return result
+
+    def _analyze_enrich_idb_native(self, input_path: Path) -> AnalysisRunResult:
+        self._progress(f"Starting REAI IDB enrichment for {input_path}")
+        started_at = utc_now().isoformat()
+        batch_id = new_batch_id()
+        resolved_input = input_path.expanduser()
+        input_kind = self._detect_input_kind(resolved_input)
+        if input_kind == InputKind.INVALID:
+            raise InputValidationError(f"Input does not exist:\n{input_path}")
+
+        self._progress("Discovering input samples")
+        candidates, skipped = self._discover_samples(resolved_input, input_kind)
+        if not candidates:
+            raise InputValidationError(f"No non-empty regular files were discovered:\n{input_path}")
+        self._progress(
+            "REAI_PROGRESS "
+            + json.dumps(
+                {
+                    "event": "sample_queue",
+                    "samples": [candidate.name for candidate in candidates],
+                },
+                separators=(",", ":"),
+            )
+        )
+
+        output_root = resolved_input.parent if input_kind == InputKind.FILE else resolved_input
+        result = AnalysisRunResult(
+            input_path=input_path,
+            input_kind=input_kind,
+            output_root=output_root,
+            workers=self.config.workers,
+            recursive=self.config.recursive,
+            samples=[],
+            skipped=skipped,
+            batch_id=batch_id,
+            mode="enrichidb",
+            started_at=started_at,
+        )
+
+        enricher = IDANativeEnricher(
+            self.config.ida,
+            self.config.ai.model_copy(update={"rate_limit_cooldown_seconds": max(180, int(self.config.ai.rate_limit_cooldown_seconds or 180))}),
+            self.config.enrichment.model_copy(update={"enabled": True}),
+            progress_callback=self._progress,
+            function_rename_only=self.enrich_idb_rename_only,
+        )
+
+        try:
+            for candidate in candidates:
+                item = self._initialize_enrich_idb_sample(candidate)
+                result.samples.append(item)
+                try:
+                    native_result = enricher.run(candidate)
+                    total_applied = native_result.function_renames + native_result.variable_renames + native_result.comments
+                    item.enrichment_stats = EnrichmentStats(
+                        function_renames=native_result.function_renames,
+                        variable_renames=native_result.variable_renames,
+                        comments=native_result.comments,
+                        applied=total_applied,
+                        failed=native_result.failed,
+                    )
+                    item.enrich_idb_path = native_result.output_idb
+                    item.sample.status = SampleState.ENRICHED
+                    item.status = ResultStatus.ENRICHED
+                    self._progress(f"{item.sample.filename}: Phase 4: saved {native_result.output_idb.name} complete")
+                except IDAUnavailableError:
+                    raise
+                except (KeyboardInterrupt, SystemExit):
+                    raise
+                except Exception as exc:
+                    item.status = ResultStatus.FAILED
+                    item.sample.status = SampleState.FAILED_ENRICHMENT
+                    item.error_type = exc.__class__.__name__
+                    item.error = redact_secrets(exc)
+                    self._progress(f"{item.sample.filename}: Phase 4: IDB enrichment failed")
+                    if input_kind == InputKind.FILE or classify_exception(exc) == RetryClass.AUTHENTICATION:
+                        raise
+                    LOGGER.error(
+                        "enrichidb sample failed sample=%s error_type=%s error=%s",
+                        item.sample.filename,
+                        item.error_type,
+                        item.error,
+                    )
+        finally:
+            result.completed_at = utc_now().isoformat()
+            self._progress("REAI IDB enrichment finished")
+
+        return result
+
+    def _initialize_enrich_idb_sample(self, source_path: Path) -> SampleResult:
+        LOGGER.info("hashing %s", source_path)
+        self._progress(f"Hashing {source_path.name}")
+        hashes = hash_file(source_path)
+        metadata_root = Path(tempfile.gettempdir()) / f"reai-enrichidb-meta-{hashes.sha256[:16]}"
+        workspace = WorkspacePaths.from_root(metadata_root)
+        sample = Sample.from_file_hashes(
+            source_path=source_path,
+            hashes=hashes,
+            workspace=workspace,
+            status=SampleState.INITIALIZED,
+        )
+        item = SampleResult(sample=sample, workspace=workspace, status=ResultStatus.INITIALIZED)
+        self._progress_sample_state(sample.filename, SampleState.INITIALIZED)
+        return item
 
     def _progress(self, message: str) -> None:
         if self._progress_callback is None:
@@ -220,10 +335,6 @@ class AnalysisOrchestrator:
         return progress
 
     def _run_sample_pipeline(self, item: SampleResult) -> None:
-        if self.enrich_idb_only:
-            self._run_enrich_idb_pipeline(item)
-            return
-
         attempts = self.config.reliability.sample_retry_limit + 1
         for attempt in range(1, attempts + 1):
             try:
@@ -241,24 +352,6 @@ class AnalysisOrchestrator:
                 if attempt >= attempts or retry_class in {RetryClass.AUTHENTICATION, RetryClass.PERMANENT, RetryClass.RESOURCE_UNAVAILABLE}:
                     raise
                 LOGGER.warning("retrying sample=%s attempt=%s error=%s", item.sample.filename, attempt, redact_secrets(exc))
-
-    def _run_enrich_idb_pipeline(self, item: SampleResult) -> None:
-        attempts = self.config.reliability.sample_retry_limit + 1
-        for attempt in range(1, attempts + 1):
-            try:
-                suffix = f" (attempt {attempt}/{attempts})" if attempts > 1 else ""
-                self._progress(f"{item.sample.filename}: starting IDB enrichment pipeline{suffix}")
-                self._run_phase2(item)
-                if item.status == ResultStatus.READY_FOR_ANALYSIS:
-                    self._run_phase3(item)
-                self._run_enrich_idb_candidates(item)
-                self._run_enrich_idb_apply(item)
-                return
-            except Exception as exc:
-                retry_class = classify_exception(exc)
-                if attempt >= attempts or retry_class in {RetryClass.AUTHENTICATION, RetryClass.PERMANENT, RetryClass.RESOURCE_UNAVAILABLE}:
-                    raise
-                LOGGER.warning("retrying enrichidb sample=%s attempt=%s error=%s", item.sample.filename, attempt, redact_secrets(exc))
 
     def _record_sample_failure(self, item: SampleResult, exc: Exception) -> None:
         item.status = ResultStatus.FAILED
@@ -691,107 +784,6 @@ class AnalysisOrchestrator:
             raise
         finally:
             configure_logging(None, verbose=self.config.verbose)
-
-    def _run_enrich_idb_candidates(self, item: SampleResult) -> None:
-        if item.status not in {
-            ResultStatus.AI_ANALYZED,
-            ResultStatus.MCP_INVESTIGATED,
-            ResultStatus.VALIDATED,
-            ResultStatus.ENRICHED,
-            ResultStatus.COMPLETE,
-        }:
-            return
-
-        repository = AnalysisRepository(item.workspace.database)
-        configure_logging(item.workspace.logs / "reai.log", verbose=self.config.verbose)
-        try:
-            self._progress(f"{item.sample.filename}: Phase 4: building IDB rename/comment candidates")
-            repository.update_sample_state(
-                item.sample.sample_id,
-                SampleState.VALIDATING,
-                message="Building IDB-only rename/comment candidates.",
-            )
-            stats = build_enrich_only_candidates(
-                repository,
-                item.sample.sample_id,
-                self.config.analysis.validation,
-                progress_callback=self._sample_phase_progress(item, 4),
-            )
-            if stats is None:
-                raise AIProviderError("No completed AI function findings are available for --enrichidb.")
-            self._progress(f"{item.sample.filename}: Phase 4: IDB rename/comment candidates ready")
-            repository.update_sample_state(
-                item.sample.sample_id,
-                SampleState.VALIDATED,
-                message="IDB-only rename/comment candidates are ready.",
-            )
-            validated_sample = repository.get_sample(item.sample.sample_id)
-            if validated_sample is not None:
-                item.sample = validated_sample
-                self._write_sample_metadata(item.workspace, validated_sample)
-            item.semantic_stats = stats
-            item.status = ResultStatus.VALIDATED
-        except Exception:
-            repository.update_sample_state(
-                item.sample.sample_id,
-                SampleState.FAILED_VALIDATION,
-                message="IDB-only candidate generation failed.",
-            )
-            failed_sample = repository.get_sample(item.sample.sample_id)
-            if failed_sample is not None:
-                self._write_sample_metadata(item.workspace, failed_sample)
-            raise
-        finally:
-            configure_logging(None, verbose=self.config.verbose)
-
-    def _run_enrich_idb_apply(self, item: SampleResult) -> None:
-        if item.status != ResultStatus.VALIDATED:
-            return
-
-        repository = AnalysisRepository(item.workspace.database)
-        configure_logging(item.workspace.logs / "reai.log", verbose=self.config.verbose)
-        try:
-            self._progress(f"{item.sample.filename}: Phase 4: applying renames, variable names, and comments")
-            repository.update_sample_state(
-                item.sample.sample_id,
-                SampleState.ENRICHING,
-                message="Applying IDB-only renames, variable names, and comments.",
-            )
-            enricher = IDBEnricher(
-                self.config.enrichment.model_copy(update={"enabled": True}),
-                self.config.ida,
-                repository,
-                item.workspace,
-                progress_callback=self._sample_phase_progress(item, 4),
-            )
-            stats = enricher.run(item.sample)
-            if stats is None:
-                return
-            self._progress(f"{item.sample.filename}: Phase 4: IDB enrichment complete")
-            repository.update_sample_state(
-                item.sample.sample_id,
-                SampleState.ENRICHED,
-                message="IDB-only enrichment complete.",
-            )
-            enriched_sample = repository.get_sample(item.sample.sample_id)
-            if enriched_sample is not None:
-                item.sample = enriched_sample
-                self._write_sample_metadata(item.workspace, enriched_sample)
-            item.enrichment_stats = stats
-            item.status = ResultStatus.ENRICHED
-        except EnrichmentError:
-            repository.update_sample_state(
-                item.sample.sample_id,
-                SampleState.FAILED_ENRICHMENT,
-                message="IDB-only enrichment failed.",
-            )
-            failed_sample = repository.get_sample(item.sample.sample_id)
-            if failed_sample is not None:
-                self._write_sample_metadata(item.workspace, failed_sample)
-            raise
-        finally:
-            configure_logging(None, verbose=self.config.verbose)
-
 
     def _run_phase6(self, item: SampleResult) -> None:
         if item.status not in {ResultStatus.VALIDATED, ResultStatus.ENRICHED}:

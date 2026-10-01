@@ -35,12 +35,15 @@ def main(
     config: Optional[Path] = typer.Option(None, "--config", help="TOML configuration file."),
     max_functions: Optional[int] = typer.Option(None, "--max-functions", min=1, help="Development limit for Phase 3 AI target count.", hidden=True),
     no_mcp: bool = typer.Option(False, "--no-mcp", help="Run in degraded bulk-extraction-only investigation mode without live MCP.", hidden=True),
-    enrichidb: bool = typer.Option(False, "--enrichidb", help="Only rename sub_* functions, rename variables, add function comments, and save analyzed IDB."),
+    enrichidb: bool = typer.Option(False, "--enrichidb", help="Only rename sub_* functions, rename variables, add function comments, and save analyzed .i64."),
+    enrichidb_rename_only: bool = typer.Option(False, "--enrichidb-rename-only", help="With --enrichidb, only rename functions; skip variable renames and function comments."),
     verbose: bool = typer.Option(False, "--verbose", help="Show additional debugging information."),
     version: bool = typer.Option(False, "--version", callback=_version_callback, is_eager=True, help="Show version and exit."),
 ) -> None:
     del version
     try:
+        if enrichidb_rename_only:
+            enrichidb = True
         app_config = build_config(
             config_path=config,
             output_dir=output,
@@ -57,6 +60,7 @@ def main(
                 app_config,
                 progress_callback=progress.update,
                 enrich_idb_only=enrichidb,
+                enrich_idb_rename_only=enrichidb_rename_only,
             )
             result = orchestrator.analyze(input_path)
         render_result(result)

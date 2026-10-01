@@ -168,6 +168,45 @@ Important outputs:
 
 Supported providers include `openai`, `anthropic`, `openai-compatible`, `lmstudio`, `ollama`, `hermes`, and test-only mock/simulation providers.
 
+## `--enrichidb` Fast Path
+
+Purpose: produce a renamed/commented IDB without MCP investigation, full malware-understanding validation, or reports.
+
+Typical live status:
+
+```text
+Phase 1: initialization complete
+Phase 2: collecting functions and call graph
+Phase 3: using AI batches of up to 5 functions with 2 concurrent batch workers
+Phase 3: applying function 58/1468: sub_140015500 (0x140015500)
+Phase 4: saving renamed and commented IDB
+Phase 4: saved malware.exe.i64 complete
+```
+
+What it does:
+
+- Runs one headless IDA session instead of creating a normal REAI workspace.
+- Lets IDA finish auto-analysis, then collects functions and call graph data from the live IDB.
+- Targets unnamed `sub_*`, `nullsub_*`, and `j_sub_*` functions while skipping library and thunk functions.
+- Decompiles target functions on demand for AI context, falling back to disassembly when Hex-Rays cannot decompile a function.
+- Runs Phase 3 bottom-up so child functions are named before callers consume their context.
+- Sends Phase 3 AI work in batches of up to 5 functions per request.
+- Runs up to 2 concurrent AI batch requests per bottom-up dependency layer.
+- Pauses batched requests on rate limits, using provider `Retry-After` when available or a 180-second fallback.
+- Applies only IDB changes: function renames, local variable renames, and function comments.
+- With `--enrichidb-rename-only`, asks the AI for function names only and skips local variable renames and function comments/explanations.
+- Skips Phase 4 MCP investigation, full Phase 5 semantic modeling, and Phase 7 report generation.
+- Applies changes directly inside the live IDB, similar to Pseudonote-style bulk renaming.
+- Saves the final analyzed database beside the input sample as `<filename>.i64`.
+- Removes accidental sibling `.idb` outputs if IDA creates both database formats.
+- Deletes its transient control/status JSON files from the system temp directory before the command exits.
+
+User-facing output:
+
+- `<input-folder>/<filename>.i64`
+
+This mode does not create a REAI output workspace, SQLite database, extracted-code folder, findings folder, or report folder.
+
 ## Phase 4: REAI MCP Investigation
 
 Purpose: revisit uncertain or important functions with targeted read-only tools instead of blindly trusting the first AI pass.

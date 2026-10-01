@@ -17,6 +17,30 @@ Everything in the pipeline is enabled by default:
 
 The user-facing config only needs IDA and AI settings.
 
+## Enrich-IDB Only Mode
+
+Use this when you only want a renamed IDA database and do not want the normal REAI workspace, SQLite state, reports, MCP investigation, or malware-understanding phases:
+
+```bash
+reai sample.exe_ --enrichidb
+```
+
+This runs a Pseudonote-style headless IDA pass. It waits for IDA auto-analysis, analyzes unnamed functions in bottom-up AI batches, applies function renames, local variable renames, and function comments directly in the live database, then saves only:
+
+```text
+sample.exe_.i64
+```
+
+beside the input sample.
+
+For function renames only:
+
+```bash
+reai sample.exe_ --enrichidb-rename-only
+```
+
+`--enrichidb-rename-only` implies `--enrichidb`. It asks the AI for function names only and skips local variable renames, function comments, and explanations.
+
 ## Minimal Config
 
 ```toml

@@ -43,3 +43,41 @@ def build_function_prompt(context: FunctionContext) -> str:
         "context": payload,
     }
     return json.dumps(instructions, indent=2, sort_keys=True)
+
+
+def build_function_batch_prompt(contexts: list[FunctionContext]) -> str:
+    payload = [context.model_dump(mode="json") for context in contexts]
+    instructions = {
+        "task": "Analyze a small batch of independent IDA functions and return one result per input function.",
+        "schema_version": SCHEMA_VERSION,
+        "output_schema": "FunctionAnalysisBatchResult",
+        "batch_policy": [
+            "Return exactly one result object for each input function address.",
+            "Each result must follow the same FunctionAnalysisResult schema used for single-function analysis.",
+            "Do not merge functions together. Analyze each function independently, while using completed child_findings inside that function's context.",
+            "Preserve each input function address in the matching result.address field.",
+        ],
+        "naming_policy": [
+            "Propose a concise, specific snake_case name reflecting each function's observed purpose, API calls, or control flow.",
+            "Avoid overly generic names such as process_data, handle_buffer, do_work, helper_function.",
+            "Do NOT preserve or repeat IDA's sub_ prefix in proposed_name. Always propose a descriptive semantic name.",
+            "Only leave proposed_name null if the function is completely empty or has no discernable purpose.",
+        ],
+        "variable_policy": [
+            "Propose renames for local variables or function arguments that appear in the decompiled code.",
+            "original MUST be the exact variable identifier as it appears in IDA decompilation.",
+            "proposed MUST be a concise valid snake_case identifier.",
+        ],
+        "evidence_policy": [
+            "Cite deterministic IDA facts for semantic conclusions.",
+            "Mark deterministic evidence as IDA_OBSERVED.",
+            "Mark semantic conclusions as AI_DERIVED only when needed.",
+            "Do not classify strings as final IOCs in Phase 3.",
+        ],
+        "uncertainty_policy": [
+            "Record unknowns when evidence is incomplete.",
+            "Set needs_investigation true for low confidence or unresolved important behavior.",
+        ],
+        "contexts": payload,
+    }
+    return json.dumps(instructions, indent=2, sort_keys=True)

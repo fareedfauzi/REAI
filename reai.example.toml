@@ -1,31 +1,281 @@
+# REAI configuration example.
+#
+# Recommended global location on Windows:
+#   C:/Users/<USER>/.reai/reai.toml
+#
+# REAI only auto-loads files named "reai.toml". This example is not used
+# automatically unless you pass it with:
+#   reai sample.exe --config reai.example.toml
+
+# ---------------------------------------------------------------------------
+# Global options
+# ---------------------------------------------------------------------------
+
+# Root directory for normal analysis workspaces and reports.
+# With --enrichidb, the final .i64 database is saved beside the input sample instead.
+output_dir = "./reai-output"
+
+# Directory input behavior.
+recursive = false
+
+# Keep this at 1 for now. Most heavy work is managed by IDA/AI-specific options.
+workers = 1
+
+# Enable debug logging and verbose terminal errors.
+verbose = false
+
+
+# ---------------------------------------------------------------------------
+# IDA / Phase 2 deterministic extraction
+# ---------------------------------------------------------------------------
+
 [ida]
-path = "C:/Program Files/IDA Professional 9.3"
-# Phase 2 speed/coverage tradeoff:
-# targeted = batch-decompile entry-point, sub_*, and callback-like functions only.
-# all = decompile every function, none = skip Hex-Rays and use disassembly for targets.
+
+# Path to ida64.exe/idat64.exe, or leave empty and set REAI_IDA_PATH / IDA_PATH.
+path = "C:/Program Files/IDA Professional 9.3/ida64.exe"
+
+# Maximum seconds REAI waits for one headless IDA extraction/enrichment run.
+timeout_seconds = 3600
+
+# Keep at 1 unless you are batch-processing and your license/machine can handle more.
+max_concurrent_instances = 1
+
+# IDB extension used for original/analyzed work databases.
+# Common values: ".i64" for 64-bit, ".idb" for legacy 32-bit databases.
+database_extension = ".i64"
+
+# Hex-Rays pseudocode extraction mode:
+#   "targeted" = decompile entry-point, sub_*, and callback-like target functions.
+#   "none"     = skip Hex-Rays in Phase 2 and use disassembly context.
+#   "all"      = decompile every function. Slow on large IDBs.
 decompile_mode = "targeted"
-# 0 means unlimited. Targeted mode is unlimited by default so Phase 3 can use pseudocode.
+
+# 0 means unlimited within decompile_mode.
 decompile_max_functions = 0
-# Functions per Hex-Rays batch. This does not limit total coverage.
+
+# Functions per Hex-Rays decompile_many() chunk. Lower to 5 or 1 if IDA stalls.
 decompile_batch_size = 25
-# Used only if batch decompilation fails and REAI emits fallback assembly.
-# 0 means unlimited.
+
+# Max disassembly lines per fallback function. 0 means unlimited.
 disassembly_max_lines_per_function = 1500
 
-[ai]
-# openai, anthropic, openai-compatible, lmstudio, ollama, or hermes
-provider = "openai"
-model = "gpt-4o-mini"
-api-key = ""
-# Phase 3 concurrent function analyses per dependency layer. Use 1 for strict serial mode.
-max_concurrent_requests = 4
-# Wait time when the AI provider rate-limits and does not send Retry-After.
-rate_limit_cooldown_seconds = 180
 
-# Only needed for provider = "openai-compatible".
-# lmstudio, ollama, and hermes already have local defaults.
+# ---------------------------------------------------------------------------
+# AI / Phase 3 bottom-up function analysis
+# ---------------------------------------------------------------------------
+
+[ai]
+
+# Providers:
+#   "openai"
+#   "anthropic"
+#   "openai-compatible"
+#   "lmstudio"
+#   "ollama"
+#   "hermes"
+#   "disabled"
+provider = "openai"
+
+# Examples:
+#   OpenAI: "gpt-4o-mini"
+#   Anthropic: "claude-3-5-sonnet-latest"
+#   Local/OpenAI-compatible: whatever your server exposes.
+model = "gpt-4o-mini"
+
+# Leave empty to use provider environment variables:
+#   OPENAI_API_KEY, ANTHROPIC_API_KEY, or REAI_AI_API_KEY.
+api-key = ""
+
+# Required only for provider = "openai-compatible".
+# lmstudio, ollama, and hermes have built-in local defaults.
 # base-url = "http://localhost:1234/v1"
 
+# Optional development cap for Phase 3 target functions.
+# Omit or comment out for no limit.
+# max_functions = 100
+
+# Concurrent AI requests inside one bottom-up dependency layer.
+# Use 1 for strict serial mode or weak local servers.
+max_concurrent_requests = 4
+
+# Provider retry count per function after transient errors.
+max_retries = 2
+
+# Fallback wait when rate-limited and the provider did not send Retry-After.
+rate_limit_cooldown_seconds = 180
+
+# Per-request AI timeout.
+timeout_seconds = 120
+
+# Internal schema/prompt versions. Usually do not change these.
+# prompt_version = "phase3-function-analysis-v1"
+# schema_version = "phase3-function-analysis-v1"
+# confidence_policy_version = "phase3-confidence-v1"
+# context_builder_version = "phase3-context-v1"
+
+
+# ---------------------------------------------------------------------------
+# MCP / Phase 4 targeted investigation
+# ---------------------------------------------------------------------------
 
 [mcp]
-allow_simulation_provider = true
+
+# Set false to skip Phase 4 entirely.
+enabled = true
+
+# Providers:
+#   "reai" / "reai-mcp" / "internal" = REAI MCP flow
+#   "disabled" = skip
+#   "simulation" / "mock" = tests only, requires allow_simulation_provider = true
+provider = "reai"
+
+# MCP launcher/settings.
+command = "reai-mcp"
+args = []
+transport = "http"
+host = "127.0.0.1"
+port = 8745
+
+# REAI should never need write access during MCP investigation.
+read_only = true
+
+# "degraded" continues when MCP is unavailable; "fail" stops the run.
+failure_policy = "degraded"
+
+# Database handling:
+#   "prefer_headless", "force_headless", "prefer_gui", "force_gui"
+database_mode = "prefer_headless"
+require_database_open = true
+require_sample_identity = false
+
+# Keep false in real use. Set true only for local tests.
+allow_simulation_provider = false
+
+# Optional caps. Comment out for defaults/no cap where allowed.
+# max_functions = 50
+max_rounds_per_function = 5
+max_tool_calls_per_function = 20
+# max_total_tool_calls = 500
+max_related_functions = 20
+max_depth = 4
+timeout_seconds = 60
+
+# MCP tool categories REAI may use.
+allowlist = [
+  "decompile",
+  "disassemble",
+  "xrefs",
+  "callers",
+  "callees",
+  "cfg",
+  "memory",
+  "data",
+  "types",
+  "function",
+  "search",
+  "metadata",
+  "functions",
+  "strings",
+  "imports",
+  "exports",
+  "globals",
+  "structures",
+  "segments",
+  "basic_blocks",
+  "xref_to",
+  "xref_from",
+]
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 semantic validation and IDB candidate creation
+# ---------------------------------------------------------------------------
+
+[analysis]
+
+# Set false to skip full semantic propagation/validation.
+# Normal full pipeline should keep this true.
+enabled = true
+
+# Internal model versions. Usually do not change these.
+taxonomy_version = "phase5-subsystem-taxonomy-v1"
+schema_version = "phase5-validated-analysis-v1"
+
+[analysis.propagation]
+
+# Multi-pass context propagation budget.
+max_passes = 3
+minimum_context_change = 1
+minimum_confidence_delta = 0.05
+
+[analysis.validation]
+
+# Confidence thresholds for applying names/comments to the IDB.
+rename_confidence_threshold = 0.65
+comment_confidence_threshold = 0.50
+variable_confidence_threshold = 0.65
+type_confidence_threshold = 0.85
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 IDB enrichment
+# ---------------------------------------------------------------------------
+
+[enrichment]
+
+# Set false to avoid saving an analyzed IDB in the normal full pipeline.
+enabled = true
+
+# Modes:
+#   "auto"     = use IDA when available, otherwise manifest fallback if allowed.
+#   "ida"      = require IDA to apply changes.
+#   "manifest" = write sidecar manifest only, do not modify an IDB.
+mode = "auto"
+
+schema_version = "phase6-idb-enrichment-v1"
+comment_marker_begin = "[REAI ANALYSIS BEGIN]"
+comment_marker_end = "[REAI ANALYSIS END]"
+allow_manifest_fallback = true
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 report generation
+# ---------------------------------------------------------------------------
+
+[report]
+
+# Set false if you only want extracted state and analyzed IDB.
+enabled = true
+
+schema_version = "phase7-report-v1"
+prompt_version = "phase7-deterministic-narrative-v1"
+
+# Defang URLs/IPs/domains in reports.
+defang_iocs = true
+
+# Any subset of: "markdown", "html", "pdf".
+formats = ["markdown", "html", "pdf"]
+
+max_important_functions = 25
+max_evidence_items = 4
+attack_version = "reai-built-in-phase7-v1"
+
+
+# ---------------------------------------------------------------------------
+# Reliability
+# ---------------------------------------------------------------------------
+
+[reliability]
+
+# Whole-sample retry attempts after retryable failures.
+sample_retry_limit = 0
+
+# Reserved for future worker supervision.
+worker_restart_limit = 0
+
+# Workspace lock stale timeout.
+lock_stale_seconds = 3600
+
+# Generic retry delay bounds used by retryable infrastructure.
+retry_initial_delay_seconds = 1.0
+retry_max_delay_seconds = 8.0

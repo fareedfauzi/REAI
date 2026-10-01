@@ -81,3 +81,17 @@ For directory input, the output root also contains:
 - `batch-summary.json`
 - `batch-report.md`
 - `batch.db`
+
+## `--enrichidb` Output
+
+`--enrichidb` is intentionally different from a full analysis run. It does not create `reai-output/`, a sample workspace, SQLite state, extracted-code folders, findings, or reports.
+
+For each input sample, the only persistent user-facing output is saved beside the sample:
+
+```text
+<input-folder>/<filename>.i64
+```
+
+The generated `.i64` contains the applied function renames, variable renames, and function comments. If `--enrichidb-rename-only` is used, the `.i64` contains function renames only; variable names and function comments are left untouched.
+
+REAI may create transient control/status files in the system temp directory while headless IDA is running. Those files are deleted before the command exits. If IDA creates an accidental sibling `.idb` during the save process, REAI removes it so only the final `.i64` remains.

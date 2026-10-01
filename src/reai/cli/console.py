@@ -15,6 +15,9 @@ error_console = Console(stderr=True)
 
 
 def render_result(result: AnalysisRunResult) -> None:
+    if result.mode == "enrichidb":
+        _render_enrichidb(result)
+        return
     if result.input_kind == InputKind.FILE and len(result.samples) == 1:
         _render_single(result)
     else:
@@ -23,6 +26,45 @@ def render_result(result: AnalysisRunResult) -> None:
 
 def _render_header(title: str) -> None:
     console.print(Panel.fit(title, border_style="cyan"))
+
+
+def _render_enrichidb(result: AnalysisRunResult) -> None:
+    if result.input_kind == InputKind.FILE and len(result.samples) == 1:
+        item = result.samples[0]
+        _render_header("REAI - IDB Enrichment")
+        table = Table.grid(padding=(0, 2))
+        table.add_column(style="bold")
+        table.add_column()
+        table.add_row("Sample", item.sample.filename)
+        table.add_row("Status", f"[red]{item.status.value}[/red]" if item.status == ResultStatus.FAILED else item.status.value)
+        if item.enrich_idb_path is not None:
+            table.add_row("IDB", _display_path(item.enrich_idb_path))
+        elif item.status == ResultStatus.FAILED and item.error:
+            table.add_row("Error", f"[red]{item.error}[/red]")
+        console.print(table)
+        if item.enrichment_stats is not None:
+            console.print()
+            console.print(
+                "Applied: "
+                f"{item.enrichment_stats.function_renames:,} function renames, "
+                f"{item.enrichment_stats.variable_renames:,} variable renames, "
+                f"{item.enrichment_stats.comments:,} comments."
+            )
+        return
+
+    _render_header("REAI - IDB Enrichment Batch")
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("Sample")
+    table.add_column("Status")
+    table.add_column("IDB")
+    for item in result.samples:
+        status_style = "red" if item.status == ResultStatus.FAILED else "green"
+        table.add_row(
+            item.sample.filename,
+            Text(item.status.value, style=status_style),
+            _display_path(item.enrich_idb_path) if item.enrich_idb_path else "",
+        )
+    console.print(table)
 
 
 def _render_single(result: AnalysisRunResult) -> None:

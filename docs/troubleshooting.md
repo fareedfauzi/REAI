@@ -105,6 +105,20 @@ Fix:
 - Check `analysis/report_model.json` and `logs/reai.log`.
 - Verify `[report].enabled = true`.
 
+## `--enrichidb` Created No Report Folder
+
+Symptom: `--enrichidb` finishes but there is no `reai-output/` workspace, SQLite database, extracted-code folder, or report.
+
+Expected behavior: `--enrichidb` is a fast IDB-only mode. It writes only `<filename>.i64` beside the input sample. Use normal `reai sample.exe_` when you want the full workspace and report pipeline.
+
+If you only want function renames and do not want variable renames or function comments, use:
+
+```bash
+reai sample.exe_ --enrichidb-rename-only
+```
+
+If IDA briefly creates a sibling `.idb` while saving, REAI removes it before exit; the final user-facing output should be the `.i64` file.
+
 ## Batch Sample Failed
 
 Symptom: directory run exits with code 3 and some samples failed.

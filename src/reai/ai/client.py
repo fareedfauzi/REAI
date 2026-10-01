@@ -8,13 +8,15 @@ from uuid import uuid4
 
 from reai.core.config import AIConfig
 from reai.core.exceptions import AIProviderError
-from reai.ai.prompts import SYSTEM_PROMPT, build_function_prompt
+from reai.ai.prompts import SYSTEM_PROMPT, build_function_batch_prompt, build_function_prompt
 from reai.ai.schemas import (
+    AIProviderBatchResponse,
     AIProviderResponse,
     AIRequestMetadata,
     ConfidenceLabel,
     EvidenceItem,
     EvidenceSource,
+    FunctionAnalysisBatchResult,
     FunctionAnalysisResult,
     FunctionContext,
 )
@@ -22,6 +24,9 @@ from reai.ai.schemas import (
 
 class AIClient(Protocol):
     def analyze_function(self, context: FunctionContext, *, analysis_pass: int, retry_count: int = 0) -> AIProviderResponse:
+        ...
+
+    def analyze_functions(self, contexts: list[FunctionContext], *, analysis_pass: int, retry_count: int = 0) -> AIProviderBatchResponse:
         ...
 
     def model_info(self) -> dict:
@@ -127,6 +132,28 @@ class SimulationAIClient:
         )
         return AIProviderResponse(result=result, request=request)
 
+    def analyze_functions(self, contexts: list[FunctionContext], *, analysis_pass: int, retry_count: int = 0) -> AIProviderBatchResponse:
+        start = time.perf_counter()
+        results = [
+            self.analyze_function(context, analysis_pass=analysis_pass, retry_count=retry_count).result
+            for context in contexts
+        ]
+        request = AIRequestMetadata(
+            request_id=str(uuid4()),
+            provider="mock",
+            model=self.config.model or "mock-phase3",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            task="function_analysis_batch",
+            function_address=None,
+            analysis_pass=analysis_pass,
+            input_tokens=_estimate_tokens(build_function_batch_prompt(contexts)),
+            output_tokens=_estimate_tokens(json.dumps([result.model_dump(mode="json") for result in results])),
+            latency_ms=int((time.perf_counter() - start) * 1000),
+            retry_count=retry_count,
+            success=True,
+        )
+        return AIProviderBatchResponse(results=results, request=request)
+
     def model_info(self) -> dict:
         return {"provider": "simulation", "model": self.config.model or "simulation-phase3"}
 
@@ -187,6 +214,40 @@ class OpenAIClient:
         )
         return AIProviderResponse(result=parsed, request=request)
 
+    def analyze_functions(self, contexts: list[FunctionContext], *, analysis_pass: int, retry_count: int = 0) -> AIProviderBatchResponse:
+        start = time.perf_counter()
+        prompt = build_function_batch_prompt(contexts)
+        try:
+            response = self._client.responses.parse(
+                model=self.config.model,
+                instructions=SYSTEM_PROMPT,
+                input=prompt,
+                text_format=FunctionAnalysisBatchResult,
+            )
+        except Exception as exc:
+            raise AIProviderError(f"OpenAI batch request failed:\n{exc}") from exc
+
+        parsed = getattr(response, "output_parsed", None)
+        if parsed is None:
+            raise AIProviderError("OpenAI response did not contain a parsed function batch analysis result.")
+
+        usage = getattr(response, "usage", None)
+        request = AIRequestMetadata(
+            request_id=getattr(response, "id", str(uuid4())),
+            provider="openai",
+            model=self.config.model,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            task="function_analysis_batch",
+            function_address=None,
+            analysis_pass=analysis_pass,
+            input_tokens=getattr(usage, "input_tokens", None) if usage else None,
+            output_tokens=getattr(usage, "output_tokens", None) if usage else None,
+            latency_ms=int((time.perf_counter() - start) * 1000),
+            retry_count=retry_count,
+            success=True,
+        )
+        return AIProviderBatchResponse(results=parsed.results, request=request)
+
     def model_info(self) -> dict:
         return {"provider": "openai", "model": self.config.model}
 
@@ -230,6 +291,29 @@ class OpenAICompatibleClient:
         )
         return AIProviderResponse(result=result, request=request)
 
+    def analyze_functions(self, contexts: list[FunctionContext], *, analysis_pass: int, retry_count: int = 0) -> AIProviderBatchResponse:
+        start = time.perf_counter()
+        prompt = build_function_batch_prompt(contexts)
+        content = self._complete_batch_json(prompt)
+        response = content["response"]
+        result = _parse_function_batch_analysis(content["text"])
+        usage = getattr(response, "usage", None)
+        request = AIRequestMetadata(
+            request_id=getattr(response, "id", str(uuid4())),
+            provider=self.config.provider,
+            model=self.config.model,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            task="function_analysis_batch",
+            function_address=None,
+            analysis_pass=analysis_pass,
+            input_tokens=getattr(usage, "prompt_tokens", None) if usage else None,
+            output_tokens=getattr(usage, "completion_tokens", None) if usage else None,
+            latency_ms=int((time.perf_counter() - start) * 1000),
+            retry_count=retry_count,
+            success=True,
+        )
+        return AIProviderBatchResponse(results=result.results, request=request)
+
     def model_info(self) -> dict:
         return {"provider": self.config.provider, "model": self.config.model, "base_url": _openai_compatible_base_url(self.config)}
 
@@ -248,6 +332,39 @@ class OpenAICompatibleClient:
                     "type": "json_schema",
                     "json_schema": {
                         "name": "FunctionAnalysisResult",
+                        "schema": schema,
+                        "strict": False,
+                    },
+                },
+            )
+        except Exception:
+            response = self._client.chat.completions.create(
+                model=self.config.model,
+                messages=messages,
+                temperature=0,
+                response_format={"type": "json_object"},
+            )
+        choice = response.choices[0]
+        content = getattr(choice.message, "content", None)
+        if not content:
+            raise AIProviderError(f"{self.config.provider} returned an empty response.")
+        return {"text": content, "response": response}
+
+    def _complete_batch_json(self, prompt: str) -> dict:
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": f"{prompt}\n\nReturn only one JSON object matching the requested batch schema."},
+        ]
+        schema = FunctionAnalysisBatchResult.model_json_schema()
+        try:
+            response = self._client.chat.completions.create(
+                model=self.config.model,
+                messages=messages,
+                temperature=0,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "FunctionAnalysisBatchResult",
                         "schema": schema,
                         "strict": False,
                     },
@@ -320,6 +437,43 @@ class AnthropicClient:
         )
         return AIProviderResponse(result=result, request=request)
 
+    def analyze_functions(self, contexts: list[FunctionContext], *, analysis_pass: int, retry_count: int = 0) -> AIProviderBatchResponse:
+        start = time.perf_counter()
+        prompt = build_function_batch_prompt(contexts)
+        try:
+            response = self._client.messages.create(
+                model=self.config.model,
+                max_tokens=12000,
+                temperature=0,
+                system=SYSTEM_PROMPT,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f"{prompt}\n\nReturn only one JSON object matching the FunctionAnalysisBatchResult schema.",
+                    }
+                ],
+            )
+        except Exception as exc:
+            raise AIProviderError(f"Anthropic batch request failed:\n{exc}") from exc
+        content = _anthropic_text(response)
+        result = _parse_function_batch_analysis(content)
+        usage = getattr(response, "usage", None)
+        request = AIRequestMetadata(
+            request_id=getattr(response, "id", str(uuid4())),
+            provider="anthropic",
+            model=self.config.model,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            task="function_analysis_batch",
+            function_address=None,
+            analysis_pass=analysis_pass,
+            input_tokens=getattr(usage, "input_tokens", None) if usage else None,
+            output_tokens=getattr(usage, "output_tokens", None) if usage else None,
+            latency_ms=int((time.perf_counter() - start) * 1000),
+            retry_count=retry_count,
+            success=True,
+        )
+        return AIProviderBatchResponse(results=result.results, request=request)
+
     def model_info(self) -> dict:
         return {"provider": "anthropic", "model": self.config.model}
 
@@ -358,6 +512,21 @@ def _parse_function_analysis(content: str) -> FunctionAnalysisResult:
             return FunctionAnalysisResult.model_validate(data)
         except ValueError as exc:
             raise AIProviderError(f"AI provider returned invalid function-analysis JSON:\n{exc}") from exc
+
+
+def _parse_function_batch_analysis(content: str) -> FunctionAnalysisBatchResult:
+    try:
+        return FunctionAnalysisBatchResult.model_validate_json(content)
+    except ValueError:
+        start = content.find("{")
+        end = content.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise AIProviderError("AI provider did not return a JSON object.")
+        try:
+            data = json.loads(content[start : end + 1])
+            return FunctionAnalysisBatchResult.model_validate(data)
+        except ValueError as exc:
+            raise AIProviderError(f"AI provider returned invalid function batch-analysis JSON:\n{exc}") from exc
 
 
 def _anthropic_text(response) -> str:

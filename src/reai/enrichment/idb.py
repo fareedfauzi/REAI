@@ -18,6 +18,7 @@ from reai.core.sample import Sample
 from reai.enrichment.export import export_changes
 from reai.enrichment.policy import assign_unique_names, build_function_comment, is_placeholder_name, merge_reai_comment, sanitize_ida_name, unique_ida_name
 from reai.enrichment.schemas import ChangeStatus, EnrichmentChange, EnrichmentRun, EnrichmentRunStatus, EnrichmentStats, IDBVerification
+from reai.ai.ordering import build_bottom_up_groups
 from reai.ida.environment import detect_ida_environment, get_clean_ida_environment
 from reai.storage.repository import AnalysisRepository
 
@@ -56,6 +57,7 @@ class IDBEnricher:
 
         source_fingerprint = self.repository.get_validated_analysis_fingerprint(sample.sample_id)
         candidates = self._load_candidates(sample.sample_id)
+        candidates = self._sort_changes_bottom_up(sample.sample_id, candidates)
         self._progress(f"preparing {len(candidates)} IDB change candidates")
         assign_unique_names(candidates)
 
@@ -245,6 +247,29 @@ class IDBEnricher:
                 )
             )
         return changes
+
+    def _sort_changes_bottom_up(self, sample_id: str, changes: list[EnrichmentChange]) -> list[EnrichmentChange]:
+        addresses = sorted({change.address for change in changes if change.address})
+        if not addresses:
+            return changes
+        groups = build_bottom_up_groups(
+            addresses,
+            self.repository.list_function_calls(sample_id),
+            self.repository.list_callgraph_components(sample_id),
+        )
+        rank = {
+            address: index
+            for index, address in enumerate(address for group in groups for address in group)
+        }
+        return sorted(
+            changes,
+            key=lambda change: (
+                rank.get(change.address or "", len(rank)),
+                change.address or "",
+                _operation_priority(change),
+                change.candidate_id or change.change_id,
+            ),
+        )
 
     def _apply_manifest_backend(
         self,
@@ -482,6 +507,16 @@ class IDBEnricher:
 def _run_id() -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     return f"enrich_{timestamp}_{uuid.uuid4().hex[:8]}"
+
+
+def _operation_priority(change: EnrichmentChange) -> int:
+    if change.entity == "function" and change.operation == "rename":
+        return 0
+    if change.entity == "variable" and change.operation == "rename":
+        return 1
+    if change.entity == "function" and change.operation == "comment":
+        return 2
+    return 3
 
 
 def _now() -> str:

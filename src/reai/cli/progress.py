@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import sys
 from contextlib import contextmanager
@@ -26,13 +27,14 @@ PHASE_TITLES: dict[int, str] = {
 }
 
 ENRICHIDB_PHASE_TITLES: dict[int, str] = {
-    1: "discovering sample and preparing workspace",
-    2: "extracting IDA functions and code context",
-    3: "analyzing functions for names, variables, and comments",
+    1: "discovering sample and hashing input",
+    2: "running IDA auto-analysis and collecting functions",
+    3: "analyzing functions for requested IDB changes",
     4: "saving renamed and commented analyzed IDB",
 }
 
 _PHASE_RE = re.compile(r"^(?:(?P<sample>.+?):\s*)?Phase\s+(?P<phase>\d+):\s*(?P<detail>.+)$")
+PROGRESS_CONTROL_PREFIX = "REAI_PROGRESS "
 
 
 def _can_encode(value: str) -> bool:
@@ -56,6 +58,12 @@ class PhaseLine:
     status: str = "pending"
 
 
+@dataclass
+class SampleChecklistItem:
+    status: str
+    detail: str = ""
+
+
 class PhaseProgress:
     def __init__(self, initial_message: str = "Starting REAI analysis...", *, phase_titles: dict[int, str] | None = None) -> None:
         self.sample_name: str | None = None
@@ -63,10 +71,14 @@ class PhaseProgress:
         self.phase_titles = dict(phase_titles or PHASE_TITLES)
         self.lines = {phase: PhaseLine(detail=detail) for phase, detail in self.phase_titles.items()}
         self.active_phase: int | None = 1
+        self.sample_checklist: dict[str, SampleChecklistItem] = {}
         if 1 in self.lines:
             self.lines[1].status = "running"
 
     def update(self, message: str) -> None:
+        if message.startswith(PROGRESS_CONTROL_PREFIX):
+            self._handle_control_message(message.removeprefix(PROGRESS_CONTROL_PREFIX))
+            return
         self.current_message = message
         match = _PHASE_RE.match(message)
         if not match:
@@ -88,6 +100,7 @@ class PhaseProgress:
             return
         if sample:
             self.sample_name = sample
+            self._record_sample_progress(sample, phase, detail)
 
         for previous in sorted(item for item in self.lines if item < phase):
             if self.lines[previous].status != "failed":
@@ -115,7 +128,75 @@ class PhaseProgress:
         for phase in sorted(self.lines):
             line = self.lines[phase]
             rows.append(_render_phase_line(phase, line, running=phase == self.active_phase))
+        checklist = self._render_sample_checklist()
+        if checklist is not None:
+            rows.append(Text(""))
+            rows.append(checklist)
         return Group(*rows)
+
+    def _record_sample_progress(self, sample: str, phase: int, detail: str) -> None:
+        final_phase = max(self.lines) if self.lines else phase
+        if _is_failure(detail):
+            self.sample_checklist[sample] = SampleChecklistItem(status="failed", detail=detail)
+        elif phase == final_phase and _is_completion(detail):
+            self.sample_checklist[sample] = SampleChecklistItem(status="done", detail=detail)
+        else:
+            self.sample_checklist[sample] = SampleChecklistItem(status="running", detail=detail)
+
+    def _handle_control_message(self, payload_text: str) -> None:
+        try:
+            payload = json.loads(payload_text)
+        except ValueError:
+            return
+        if payload.get("event") != "sample_queue":
+            return
+        for sample in payload.get("samples") or []:
+            sample_name = str(sample)
+            self.sample_checklist.setdefault(sample_name, SampleChecklistItem(status="todo"))
+
+    def _render_sample_checklist(self) -> Group | None:
+        if not self.sample_checklist:
+            return None
+        done = sum(1 for item in self.sample_checklist.values() if item.status == "done")
+        failed = sum(1 for item in self.sample_checklist.values() if item.status == "failed")
+        running = sum(1 for item in self.sample_checklist.values() if item.status == "running")
+        todo = sum(1 for item in self.sample_checklist.values() if item.status == "todo")
+        header = Text.from_markup(
+            f"[bold]Samples:[/bold] [cyan]{running} analyzing[/cyan], [green]{done} done[/green], "
+            f"[dim]{todo} todo[/dim], [red]{failed} failed[/red]"
+        )
+        rows: list[Text] = [header]
+        max_per_group = 8
+        sections = [
+            ("Analyzing", "running"),
+            ("Done", "done"),
+            ("Failed", "failed"),
+            ("Todo", "todo"),
+        ]
+        for label, status in sections:
+            items = [(sample, item) for sample, item in self.sample_checklist.items() if item.status == status]
+            if not items:
+                continue
+            rows.append(Text.from_markup(f"[bold]{label}[/bold]"))
+            visible_items = items[:max_per_group] if status == "todo" else items[-max_per_group:]
+            for sample, item in visible_items:
+                rows.append(_render_sample_checklist_item(sample, item))
+            hidden = len(items) - len(visible_items)
+            if hidden:
+                suffix = "more" if status == "todo" else "earlier"
+                rows.append(Text.from_markup(f"[dim]... {hidden} {suffix} sample(s)[/dim]"))
+        return Group(*rows)
+
+
+def _render_sample_checklist_item(sample: str, item: SampleChecklistItem) -> Text:
+    sample_label = escape(sample)
+    if item.status == "failed":
+        return Text.from_markup(f"[red]{FAIL_SYMBOL}[/red]  {sample_label}")
+    if item.status == "done":
+        return Text.from_markup(f"[green]{CHECK_SYMBOL}[/green]  {sample_label}")
+    if item.status == "running":
+        return Text.from_markup(f"[cyan]>[/cyan]  {sample_label}")
+    return Text.from_markup(f"[dim]{PENDING_SYMBOL}  {sample_label}[/dim]")
 
 
 @contextmanager
@@ -168,6 +249,8 @@ def _phase1_detail_from_message(message: str) -> str | None:
     lowered = message.lower()
     if lowered.startswith("starting reai analysis"):
         return "starting analysis"
+    if lowered.startswith("starting reai idb enrichment"):
+        return "starting IDB enrichment"
     if lowered == "discovering input samples":
         return "discovering input samples"
     if lowered.startswith("hashing "):
